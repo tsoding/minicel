@@ -35,5 +35,5 @@ jobs:
         env:
           CC: clang
           CXX: clang++
-# TODO: there is no CI for windows
+# TODO(#4): there is no CI for windows
 # TODO(#21): there is no CI build for FreeBSD
