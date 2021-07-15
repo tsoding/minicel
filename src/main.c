@@ -511,8 +511,12 @@ Expr_Index move_expr_in_dir(Expr_Buffer *eb, Expr_Index root, Dir dir)
         Expr_Index new_index = expr_buffer_alloc(eb);
 
         expr_buffer_at(eb, new_index)->kind = EXPR_KIND_PLUS;
-        expr_buffer_at(eb, new_index)->as.plus.lhs = move_expr_in_dir(eb, expr_buffer_at(eb, root)->as.plus.lhs, dir);
-        expr_buffer_at(eb, new_index)->as.plus.rhs = move_expr_in_dir(eb, expr_buffer_at(eb, root)->as.plus.rhs, dir);
+
+        Expr_Index tmp = move_expr_in_dir(eb, expr_buffer_at(eb, root)->as.plus.lhs, dir);
+        expr_buffer_at(eb, new_index)->as.plus.lhs = tmp;
+
+        tmp = move_expr_in_dir(eb, expr_buffer_at(eb, root)->as.plus.rhs, dir);
+        expr_buffer_at(eb, new_index)->as.plus.rhs = tmp;
 
         return new_index;
     }
