@@ -37,9 +37,7 @@ $ ./minicel csv/sum.csv
 | Type       | Description                                                                                                        | Examples                          |
 | ---        | ---                                                                                                                | ---                               |
 | Text       | Just a human readiable text.                                                                                       | `A`, `B`, `C`, etc                |
-| Number     | Anything that can be parsed as a double by [strtod][strtod]                                                                | `1`, `2.0`, `1e-6`, etc           |
+| Number     | Anything that can be parsed as a double by [strtod](https://en.cppreference.com/w/c/string/byte/strtof)                                                                | `1`, `2.0`, `1e-6`, etc           |
 | Expression | Always starts with `=`. Excel style math expression that involves numbers and other cells.                         | `=A1+B1`, `=69+420`, `=A1+69` etc |
 | Clone      | Always starts with `:`. Clones a neighbor cell in a particular direction denoted by characters `<`, `>`, `v`, `^`. | `:<`, `:>`, `:v`, `:^`             |
 
-
-[stdtod]: https://en.cppreference.com/w/cpp/string/byte/strtof
