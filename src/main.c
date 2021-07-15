@@ -390,6 +390,8 @@ void table_eval_cell(Table *table, Cell *cell)
     }
 }
 
+// TODO: syntax for copying expression from a neighbor cell
+
 int main(int argc, char **argv)
 {
     if (argc < 2) {
