@@ -220,20 +220,6 @@ Expr *parse_expr(String_View *source)
     return parse_plus_expr(source);
 }
 
-Table table_alloc(size_t rows, size_t cols)
-{
-    Table table = {0};
-    table.rows = rows;
-    table.cols = cols;
-    table.cells = malloc(sizeof(Cell) * rows * cols);
-    if (table.cells == NULL) {
-        fprintf(stderr, "ERROR: could not allocate memory for the table\n");
-        exit(1);
-    }
-    memset(table.cells, 0, sizeof(Cell) * rows * cols);
-    return table;
-}
-
 Cell *table_cell_at(Table *table, size_t row, size_t col)
 {
     assert(row < table->rows);
@@ -426,9 +412,10 @@ int main(int argc, char **argv)
         .data = content,
     };
 
-    size_t rows, cols;
-    estimate_table_size(input, &rows, &cols);
-    Table table = table_alloc(rows, cols);
+    Table table = {0};
+    estimate_table_size(input, &table.rows, &table.cols);
+    table.cells = malloc(sizeof(*table.cells) * table.rows * table.cols);
+    memset(table.cells, 0, sizeof(*table.cells) * table.rows * table.cols);
     parse_table_from_content(&table, input);
 
     for (size_t row = 0; row < table.rows; ++row) {
@@ -456,6 +443,9 @@ int main(int argc, char **argv)
         }
         printf("\n");
     }
+
+    free(content);
+    free(table.cells);
 
     return 0;
 }
