@@ -16,7 +16,7 @@ typedef enum {
     EXPR_KIND_PLUS,
 } Expr_Kind;
 
-// TODO: relative pointers for Expr_Plus
+// TODO(#5): relative pointers for Expr_Plus
 typedef struct {
     Expr_Index lhs;
     Expr_Index rhs;
