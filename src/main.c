@@ -8,6 +8,7 @@
 #include "./sv.h"
 
 typedef struct Expr Expr;
+typedef size_t Expr_Index;
 
 typedef enum {
     EXPR_KIND_NUMBER = 0,
@@ -17,8 +18,8 @@ typedef enum {
 
 // TODO: relative pointers for Expr_Plus
 typedef struct {
-    Expr *lhs;
-    Expr *rhs;
+    Expr_Index lhs;
+    Expr_Index rhs;
 } Expr_Plus;
 
 typedef struct {
@@ -36,6 +37,34 @@ struct Expr {
     Expr_Kind kind;
     Expr_As as;
 };
+
+typedef struct {
+    size_t count;
+    size_t capacity;
+    Expr *items;
+} Expr_Buffer;
+
+Expr_Index expr_buffer_alloc(Expr_Buffer *eb)
+{
+    if (eb->count >= eb->capacity) {
+        if (eb->capacity == 0) {
+            assert(eb->items == NULL);
+            eb->capacity = 128;
+        } else {
+            eb->capacity *= 2;
+        }
+
+        eb->items = realloc(eb->items, sizeof(Expr) * eb->capacity);
+    }
+
+    return eb->count++;
+}
+
+Expr *expr_buffer_at(Expr_Buffer *eb, Expr_Index index)
+{
+    assert(index < eb->count);
+    return &eb->items[index];
+}
 
 typedef enum {
     CELL_KIND_TEXT = 0,
@@ -65,7 +94,7 @@ typedef enum {
 } Eval_Status;
 
 typedef struct {
-    Expr *ast;
+    Expr_Index index;
     Eval_Status status;
     double value;
 } Cell_Expr;
@@ -136,7 +165,7 @@ bool sv_strtol(String_View sv, long int *out)
     return endptr != tmp_buffer && *endptr == '\0';
 }
 
-Expr *parse_primary_expr(String_View *source)
+Expr_Index parse_primary_expr(String_View *source, Expr_Buffer *eb)
 {
     String_View token = next_token(source);
 
@@ -145,7 +174,8 @@ Expr *parse_primary_expr(String_View *source)
         exit(1);
     }
 
-    Expr *expr = malloc(sizeof(Expr));
+    Expr_Index expr_index = expr_buffer_alloc(eb);
+    Expr *expr = expr_buffer_at(eb, expr_index);
     memset(expr, 0, sizeof(Expr));
 
     if (sv_strtod(token, &expr->as.number)) {
@@ -155,7 +185,7 @@ Expr *parse_primary_expr(String_View *source)
         expr->kind = EXPR_KIND_CELL;
 
         if (!isupper(*token.data)) {
-            fprintf(stderr, "ERROR: cell reference must start with capital letter");
+            fprintf(stderr, "ERROR: cell reference must start with capital letter\n");
             exit(1);
         }
 
@@ -172,32 +202,35 @@ Expr *parse_primary_expr(String_View *source)
         expr->as.cell.row = (size_t) row;
     }
 
-    return expr;
+    return expr_index;
 }
 
-Expr *parse_plus_expr(String_View *source)
+Expr_Index parse_plus_expr(String_View *source, Expr_Buffer *eb)
 {
-    Expr *lhs = parse_primary_expr(source);
+    Expr_Index lhs_index = parse_primary_expr(source, eb);
 
     String_View token = next_token(source);
     if (token.data != NULL && sv_eq(token, SV("+"))) {
-        Expr *rhs = parse_plus_expr(source);
+        Expr_Index rhs_index = parse_plus_expr(source, eb);
 
-        Expr *expr = malloc(sizeof(Expr));
+        Expr_Index expr_index = expr_buffer_alloc(eb);
+        Expr *expr = expr_buffer_at(eb, expr_index);
         memset(expr, 0, sizeof(Expr));
         expr->kind = EXPR_KIND_PLUS;
-        expr->as.plus.lhs = lhs;
-        expr->as.plus.rhs = rhs;
+        expr->as.plus.lhs = lhs_index;
+        expr->as.plus.rhs = rhs_index;
 
-        return expr;
+        return expr_index;
     }
 
-    return lhs;
+    return lhs_index;
 }
 
-void dump_expr(FILE *stream, Expr *expr, int level)
+void dump_expr(FILE *stream, Expr_Buffer *eb, Expr_Index expr_index, int level)
 {
     fprintf(stream, "%*s", level * 2, "");
+
+    Expr *expr = expr_buffer_at(eb, expr_index);
 
     switch (expr->kind) {
     case EXPR_KIND_NUMBER:
@@ -210,15 +243,15 @@ void dump_expr(FILE *stream, Expr *expr, int level)
 
     case EXPR_KIND_PLUS:
         fprintf(stream, "PLUS:\n");
-        dump_expr(stream, expr->as.plus.lhs, level + 1);
-        dump_expr(stream, expr->as.plus.rhs, level + 1);
+        dump_expr(stream, eb, expr->as.plus.lhs, level + 1);
+        dump_expr(stream, eb, expr->as.plus.rhs, level + 1);
         break;
     }
 }
 
-Expr *parse_expr(String_View *source)
+Expr_Index parse_expr(String_View *source, Expr_Buffer *eb)
 {
-    return parse_plus_expr(source);
+    return parse_plus_expr(source, eb);
 }
 
 Cell *table_cell_at(Table *table, size_t row, size_t col)
@@ -287,7 +320,7 @@ error:
     return NULL;
 }
 
-void parse_table_from_content(Table *table, String_View content)
+void parse_table_from_content(Table *table, Expr_Buffer *eb, String_View content)
 {
     for (size_t row = 0; content.count > 0; ++row) {
         String_View line = sv_chop_by_delim(&content, '\n');
@@ -298,7 +331,7 @@ void parse_table_from_content(Table *table, String_View content)
             if (sv_starts_with(cell_value, SV("="))) {
                 sv_chop_left(&cell_value, 1);
                 cell->kind = CELL_KIND_EXPR;
-                cell->as.expr.ast = parse_expr(&cell_value);
+                cell->as.expr.index = parse_expr(&cell_value, eb);
             } else {
                 if (sv_strtod(cell_value, &cell->as.number)) {
                     cell->kind = CELL_KIND_NUMBER;
@@ -336,10 +369,12 @@ void estimate_table_size(String_View content, size_t *out_rows, size_t *out_cols
     }
 }
 
-void table_eval_cell(Table *table, Cell *cell);
+void table_eval_cell(Table *table, Expr_Buffer *eb, Cell *cell);
 
-double table_eval_expr(Table *table, Expr *expr)
+double table_eval_expr(Table *table, Expr_Buffer *eb, Expr_Index expr_index)
 {
+    Expr *expr = expr_buffer_at(eb, expr_index);
+
     switch (expr->kind) {
     case EXPR_KIND_NUMBER:
         return expr->as.number;
@@ -356,7 +391,7 @@ double table_eval_expr(Table *table, Expr *expr)
         break;
 
         case CELL_KIND_EXPR: {
-            table_eval_cell(table, cell);
+            table_eval_cell(table, eb, cell);
             return cell->as.expr.value;
         }
         break;
@@ -365,8 +400,8 @@ double table_eval_expr(Table *table, Expr *expr)
     break;
 
     case EXPR_KIND_PLUS: {
-        double lhs = table_eval_expr(table, expr->as.plus.lhs);
-        double rhs = table_eval_expr(table, expr->as.plus.rhs);
+        double lhs = table_eval_expr(table, eb, expr->as.plus.lhs);
+        double rhs = table_eval_expr(table, eb, expr->as.plus.rhs);
         return lhs + rhs;
     }
     break;
@@ -374,7 +409,7 @@ double table_eval_expr(Table *table, Expr *expr)
     return 0;
 }
 
-void table_eval_cell(Table *table, Cell *cell)
+void table_eval_cell(Table *table, Expr_Buffer *eb, Cell *cell)
 {
     if (cell->kind == CELL_KIND_EXPR) {
         if (cell->as.expr.status == INPROGRESS) {
@@ -384,7 +419,7 @@ void table_eval_cell(Table *table, Cell *cell)
 
         if (cell->as.expr.status == UNEVALUATED) {
             cell->as.expr.status = INPROGRESS;
-            cell->as.expr.value = table_eval_expr(table, cell->as.expr.ast);
+            cell->as.expr.value = table_eval_expr(table, eb, cell->as.expr.index);
             cell->as.expr.status = EVALUATED;
         }
     }
@@ -415,16 +450,18 @@ int main(int argc, char **argv)
         .data = content,
     };
 
+    Expr_Buffer eb = {0};
+
     Table table = {0};
     estimate_table_size(input, &table.rows, &table.cols);
     table.cells = malloc(sizeof(*table.cells) * table.rows * table.cols);
     memset(table.cells, 0, sizeof(*table.cells) * table.rows * table.cols);
-    parse_table_from_content(&table, input);
+    parse_table_from_content(&table, &eb, input);
 
     for (size_t row = 0; row < table.rows; ++row) {
         for (size_t col = 0; col < table.cols; ++col) {
             Cell *cell = table_cell_at(&table, row, col);
-            table_eval_cell(&table, cell);
+            table_eval_cell(&table, &eb, cell);
 
             switch (cell->kind) {
             case CELL_KIND_TEXT:
@@ -449,6 +486,7 @@ int main(int argc, char **argv)
 
     free(content);
     free(table.cells);
+    free(eb.items);
 
     return 0;
 }
