@@ -144,7 +144,7 @@ String_View next_token(String_View *source)
 
 bool sv_strtod(String_View sv, double *out)
 {
-    // TODO: stretchy tmp_buffer for sv_strtod and sv_strtol
+    // TODO(#6): stretchy tmp_buffer for sv_strtod and sv_strtol
     static char tmp_buffer[1024 * 4];
     assert(sv.count < sizeof(tmp_buffer));
     snprintf(tmp_buffer, sizeof(tmp_buffer), SV_Fmt, SV_Arg(sv));
