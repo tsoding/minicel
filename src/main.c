@@ -493,17 +493,15 @@ Cell_Index nbor_in_dir(Cell_Index index, Dir dir)
 
 Expr_Index move_expr_in_dir(Expr_Buffer *eb, Expr_Index root, Dir dir)
 {
-    Expr *expr = expr_buffer_at(eb, root);
-    switch (expr->kind) {
+    switch (expr_buffer_at(eb, root)->kind) {
     case EXPR_KIND_NUMBER:
         return root;
 
     case EXPR_KIND_CELL: {
         Expr_Index new_index = expr_buffer_alloc(eb);
-        Expr *new_expr = expr_buffer_at(eb, new_index);
 
-        new_expr->kind = EXPR_KIND_CELL;
-        new_expr->as.cell = nbor_in_dir(expr->as.cell, dir);
+        expr_buffer_at(eb, new_index)->kind = EXPR_KIND_CELL;
+        expr_buffer_at(eb, new_index)->as.cell = nbor_in_dir(expr_buffer_at(eb, root)->as.cell, dir);
 
         return new_index;
     }
@@ -511,11 +509,10 @@ Expr_Index move_expr_in_dir(Expr_Buffer *eb, Expr_Index root, Dir dir)
 
     case EXPR_KIND_PLUS: {
         Expr_Index new_index = expr_buffer_alloc(eb);
-        Expr *new_expr = expr_buffer_at(eb, new_index);
 
-        new_expr->kind = EXPR_KIND_PLUS;
-        new_expr->as.plus.lhs = move_expr_in_dir(eb, expr->as.plus.lhs, dir);
-        new_expr->as.plus.rhs = move_expr_in_dir(eb, expr->as.plus.rhs, dir);
+        expr_buffer_at(eb, new_index)->kind = EXPR_KIND_PLUS;
+        expr_buffer_at(eb, new_index)->as.plus.lhs = move_expr_in_dir(eb, expr_buffer_at(eb, root)->as.plus.lhs, dir);
+        expr_buffer_at(eb, new_index)->as.plus.rhs = move_expr_in_dir(eb, expr_buffer_at(eb, root)->as.plus.rhs, dir);
 
         return new_index;
     }
