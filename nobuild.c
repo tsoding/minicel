@@ -7,7 +7,8 @@ int main(int argc, char **argv)
 {
     GO_REBUILD_URSELF(argc, argv);
 
-    CMD("clang", CFLAGS, "-fsanitize=memory", "-o", "minicel", "src/main.c");
+    // CMD("clang", CFLAGS, "-fsanitize=memory", "-o", "minicel", "src/main.c");
+    CMD("gcc", CFLAGS, "-o", "minicel", "src/main.c");
 
     if (argc > 1) {
         if (strcmp(argv[1], "run") == 0) {
