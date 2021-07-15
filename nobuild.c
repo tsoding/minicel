@@ -12,7 +12,7 @@ int main(int argc, char **argv)
 
     if (argc > 1) {
         if (strcmp(argv[1], "run") == 0) {
-            CMD("./minicel", "input.csv");
+            CMD("./minicel", "./csv/stress-copy.csv");
         } else if (strcmp(argv[1], "gdb") == 0) {
             CMD("gdb", "./minicel");
         } else {

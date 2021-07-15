@@ -24,11 +24,11 @@ typedef struct {
 typedef struct {
     size_t row;
     size_t col;
-} Expr_Cell;
+} Cell_Index;
 
 typedef union {
     double number;
-    Expr_Cell cell;
+    Cell_Index cell;
     Expr_Plus plus;
 } Expr_As;
 
@@ -56,6 +56,8 @@ Expr_Index expr_buffer_alloc(Expr_Buffer *eb)
         eb->items = realloc(eb->items, sizeof(Expr) * eb->capacity);
     }
 
+    memset(&eb->items[eb->count], 0, sizeof(Expr));
+
     return eb->count++;
 }
 
@@ -66,9 +68,17 @@ Expr *expr_buffer_at(Expr_Buffer *eb, Expr_Index index)
 }
 
 typedef enum {
+    DIR_LEFT = 0,
+    DIR_RIGHT,
+    DIR_UP,
+    DIR_DOWN,
+} Dir;
+
+typedef enum {
     CELL_KIND_TEXT = 0,
     CELL_KIND_NUMBER,
     CELL_KIND_EXPR,
+    CELL_KIND_CLONE,
 } Cell_Kind;
 
 const char *cell_kind_as_cstr(Cell_Kind kind)
@@ -94,7 +104,6 @@ typedef enum {
 
 typedef struct {
     Expr_Index index;
-    Eval_Status status;
     double value;
 } Cell_Expr;
 
@@ -102,11 +111,13 @@ typedef union {
     String_View text;
     double number;
     Cell_Expr expr;
+    Dir clone;
 } Cell_As;
 
 typedef struct {
     Cell_Kind kind;
     Cell_As as;
+    Eval_Status status;
 } Cell;
 
 typedef struct {
@@ -187,7 +198,6 @@ Expr_Index parse_primary_expr(String_View *source, Tmp_Cstr *tc, Expr_Buffer *eb
 
     Expr_Index expr_index = expr_buffer_alloc(eb);
     Expr *expr = expr_buffer_at(eb, expr_index);
-    memset(expr, 0, sizeof(Expr));
 
     if (sv_strtod(token, tc, &expr->as.number)) {
         expr->kind = EXPR_KIND_NUMBER;
@@ -226,7 +236,6 @@ Expr_Index parse_plus_expr(String_View *source, Tmp_Cstr *tc, Expr_Buffer *eb)
 
         Expr_Index expr_index = expr_buffer_alloc(eb);
         Expr *expr = expr_buffer_at(eb, expr_index);
-        memset(expr, 0, sizeof(Expr));
         expr->kind = EXPR_KIND_PLUS;
         expr->as.plus.lhs = lhs_index;
         expr->as.plus.rhs = rhs_index;
@@ -265,11 +274,11 @@ Expr_Index parse_expr(String_View *source, Tmp_Cstr *tc, Expr_Buffer *eb)
     return parse_plus_expr(source, tc, eb);
 }
 
-Cell *table_cell_at(Table *table, size_t row, size_t col)
+Cell *table_cell_at(Table *table, Cell_Index index)
 {
-    assert(row < table->rows);
-    assert(col < table->cols);
-    return &table->cells[row * table->cols + col];
+    assert(index.row < table->rows);
+    assert(index.col < table->cols);
+    return &table->cells[index.row * table->cols + index.col];
 }
 
 void usage(FILE *stream)
@@ -337,12 +346,31 @@ void parse_table_from_content(Table *table, Expr_Buffer *eb, Tmp_Cstr *tc, Strin
         String_View line = sv_chop_by_delim(&content, '\n');
         for (size_t col = 0; line.count > 0; ++col) {
             String_View cell_value = sv_trim(sv_chop_by_delim(&line, '|'));
-            Cell *cell = table_cell_at(table, row, col);
+            Cell_Index cell_index = {
+                .row = row,
+                .col = col,
+            };
+            Cell *cell = table_cell_at(table, cell_index);
 
             if (sv_starts_with(cell_value, SV("="))) {
                 sv_chop_left(&cell_value, 1);
                 cell->kind = CELL_KIND_EXPR;
                 cell->as.expr.index = parse_expr(&cell_value, tc, eb);
+            } else if (sv_starts_with(cell_value, SV(":"))) {
+                sv_chop_left(&cell_value, 1);
+                cell->kind = CELL_KIND_CLONE;
+                if (sv_eq(cell_value, SV("<"))) {
+                    cell->as.clone = DIR_LEFT;
+                } else if (sv_eq(cell_value, SV(">"))) {
+                    cell->as.clone = DIR_RIGHT;
+                } else if (sv_eq(cell_value, SV("^"))) {
+                    cell->as.clone = DIR_UP;
+                } else if (sv_eq(cell_value, SV("v"))) {
+                    cell->as.clone = DIR_DOWN;
+                } else {
+                    fprintf(stderr, "ERROR: "SV_Fmt" is not a correct direction to clone a cell from\n", SV_Arg(cell_value));
+                    exit(1);
+                }
             } else {
                 if (sv_strtod(cell_value, tc, &cell->as.number)) {
                     cell->kind = CELL_KIND_NUMBER;
@@ -380,7 +408,7 @@ void estimate_table_size(String_View content, size_t *out_rows, size_t *out_cols
     }
 }
 
-void table_eval_cell(Table *table, Expr_Buffer *eb, Cell *cell);
+void table_eval_cell(Table *table, Expr_Buffer *eb, Cell_Index cell_index);
 
 double table_eval_expr(Table *table, Expr_Buffer *eb, Expr_Index expr_index)
 {
@@ -391,21 +419,22 @@ double table_eval_expr(Table *table, Expr_Buffer *eb, Expr_Index expr_index)
         return expr->as.number;
 
     case EXPR_KIND_CELL: {
-        Cell *cell = table_cell_at(table, expr->as.cell.row, expr->as.cell.col);
+        table_eval_cell(table, eb, expr->as.cell);
+
+        Cell *cell = table_cell_at(table, expr->as.cell);
         switch (cell->kind) {
         case CELL_KIND_NUMBER:
             return cell->as.number;
-        case CELL_KIND_TEXT: {
+        case CELL_KIND_TEXT:
             fprintf(stderr, "ERROR: text cells may not participate in math expressions\n");
             exit(1);
-        }
-        break;
 
-        case CELL_KIND_EXPR: {
-            table_eval_cell(table, eb, cell);
+        case CELL_KIND_EXPR:
             return cell->as.expr.value;
-        }
-        break;
+
+        case CELL_KIND_CLONE:
+            assert(0 && "unreachable: cell should never be a clone after the evaluation");
+            break;
         }
     }
     break;
@@ -420,19 +449,138 @@ double table_eval_expr(Table *table, Expr_Buffer *eb, Expr_Index expr_index)
     return 0;
 }
 
-void table_eval_cell(Table *table, Expr_Buffer *eb, Cell *cell)
+Dir opposite_dir(Dir dir)
 {
-    if (cell->kind == CELL_KIND_EXPR) {
-        if (cell->as.expr.status == INPROGRESS) {
+    switch (dir) {
+    case DIR_LEFT:
+        return DIR_RIGHT;
+    case DIR_RIGHT:
+        return DIR_LEFT;
+    case DIR_UP:
+        return DIR_DOWN;
+    case DIR_DOWN:
+        return DIR_UP;
+    default: {
+        assert(0 && "unreachable: your memory is probably corrupted somewhere");
+        exit(1);
+    }
+    }
+}
+
+Cell_Index nbor_in_dir(Cell_Index index, Dir dir)
+{
+    switch (dir) {
+    case DIR_LEFT:
+        index.col -= 1;
+        break;
+    case DIR_RIGHT:
+        index.col += 1;
+        break;
+    case DIR_UP:
+        index.row -= 1;
+        break;
+    case DIR_DOWN:
+        index.row += 1;
+        break;
+    default: {
+        assert(0 && "unreachable: your memory is probably corrupted somewhere");
+        exit(1);
+    }
+    }
+
+    return index;
+}
+
+Expr_Index move_expr_in_dir(Expr_Buffer *eb, Expr_Index root, Dir dir)
+{
+    switch (expr_buffer_at(eb, root)->kind) {
+    case EXPR_KIND_NUMBER:
+        return root;
+
+    case EXPR_KIND_CELL: {
+        Expr_Index new_index = expr_buffer_alloc(eb);
+
+        expr_buffer_at(eb, new_index)->kind = EXPR_KIND_CELL;
+        expr_buffer_at(eb, new_index)->as.cell = nbor_in_dir(expr_buffer_at(eb, root)->as.cell, dir);
+
+        return new_index;
+    }
+    break;
+
+    case EXPR_KIND_PLUS: {
+        Expr_Index new_index = expr_buffer_alloc(eb);
+
+        expr_buffer_at(eb, new_index)->kind = EXPR_KIND_PLUS;
+        expr_buffer_at(eb, new_index)->as.plus.lhs = move_expr_in_dir(eb, expr_buffer_at(eb, root)->as.plus.lhs, dir);
+        expr_buffer_at(eb, new_index)->as.plus.rhs = move_expr_in_dir(eb, expr_buffer_at(eb, root)->as.plus.rhs, dir);
+
+        return new_index;
+    }
+    break;
+
+    default: {
+        assert(0 && "unreachable: your memory is probably corrupted somewhere");
+        exit(1);
+    }
+    }
+}
+
+void table_eval_cell(Table *table, Expr_Buffer *eb, Cell_Index cell_index)
+{
+    Cell *cell = table_cell_at(table, cell_index);
+
+    switch (cell->kind) {
+    case CELL_KIND_TEXT:
+    case CELL_KIND_NUMBER:
+        cell->status = EVALUATED;
+        break;
+    case CELL_KIND_EXPR: {
+        if (cell->status == INPROGRESS) {
             fprintf(stderr, "ERROR: circular dependency is detected!\n");
             exit(1);
         }
 
-        if (cell->as.expr.status == UNEVALUATED) {
-            cell->as.expr.status = INPROGRESS;
+        if (cell->status == UNEVALUATED) {
+            cell->status = INPROGRESS;
             cell->as.expr.value = table_eval_expr(table, eb, cell->as.expr.index);
-            cell->as.expr.status = EVALUATED;
+            cell->status = EVALUATED;
         }
+    }
+    break;
+
+    case CELL_KIND_CLONE: {
+        if (cell->status == INPROGRESS) {
+            fprintf(stderr, "ERROR: circular dependency is detected!\n");
+            exit(1);
+        }
+
+        if (cell->status == UNEVALUATED) {
+            cell->status = INPROGRESS;
+
+            Dir dir = cell->as.clone;
+            Cell_Index nbor_index = nbor_in_dir(cell_index, dir);
+            table_eval_cell(table, eb, nbor_index);
+
+            Cell *nbor = table_cell_at(table, nbor_index);
+            cell->kind = nbor->kind;
+            cell->as = nbor->as;
+
+            if (cell->kind == CELL_KIND_EXPR) {
+                cell->as.expr.index = move_expr_in_dir(eb, cell->as.expr.index,  opposite_dir(dir));
+                cell->as.expr.value = table_eval_expr(table, eb, cell->as.expr.index);
+            }
+
+            cell->status = EVALUATED;
+        } else {
+            assert(0 && "unreachable: evaluated clones are an absurd. When a clone cell is evaluated it becomes its neighbor kind");
+        }
+    }
+    break;
+
+    default: {
+        assert(0 && "unreachable: your memory is probably corrupted somewhere");
+        exit(1);
+    }
     }
 }
 
@@ -472,9 +620,13 @@ int main(int argc, char **argv)
 
     for (size_t row = 0; row < table.rows; ++row) {
         for (size_t col = 0; col < table.cols; ++col) {
-            Cell *cell = table_cell_at(&table, row, col);
-            table_eval_cell(&table, &eb, cell);
+            Cell_Index cell_index = {
+                .row = row,
+                .col = col,
+            };
+            table_eval_cell(&table, &eb, cell_index);
 
+            Cell *cell = table_cell_at(&table, cell_index);
             switch (cell->kind) {
             case CELL_KIND_TEXT:
                 printf(SV_Fmt, SV_Arg(cell->as.text));
@@ -486,6 +638,10 @@ int main(int argc, char **argv)
 
             case CELL_KIND_EXPR:
                 printf("%lf", cell->as.expr.value);
+                break;
+
+            case CELL_KIND_CLONE:
+                assert(0 && "unreachable: cell should never be a clone after the evaluation");
                 break;
             }
 
