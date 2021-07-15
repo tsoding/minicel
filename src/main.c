@@ -185,7 +185,7 @@ Expr_Index parse_primary_expr(String_View *source, Expr_Buffer *eb)
         expr->kind = EXPR_KIND_CELL;
 
         if (!isupper(*token.data)) {
-            fprintf(stderr, "ERROR: cell reference must start with capital letter");
+            fprintf(stderr, "ERROR: cell reference must start with capital letter\n");
             exit(1);
         }
 
