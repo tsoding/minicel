@@ -56,6 +56,8 @@ Expr_Index expr_buffer_alloc(Expr_Buffer *eb)
         eb->items = realloc(eb->items, sizeof(Expr) * eb->capacity);
     }
 
+    memset(&eb->items[eb->count], 0, sizeof(Expr));
+
     return eb->count++;
 }
 
@@ -102,7 +104,6 @@ typedef enum {
 
 typedef struct {
     Expr_Index index;
-    Eval_Status status;
     double value;
 } Cell_Expr;
 
@@ -116,6 +117,7 @@ typedef union {
 typedef struct {
     Cell_Kind kind;
     Cell_As as;
+    Eval_Status status;
 } Cell;
 
 typedef struct {
@@ -196,7 +198,6 @@ Expr_Index parse_primary_expr(String_View *source, Tmp_Cstr *tc, Expr_Buffer *eb
 
     Expr_Index expr_index = expr_buffer_alloc(eb);
     Expr *expr = expr_buffer_at(eb, expr_index);
-    memset(expr, 0, sizeof(Expr));
 
     if (sv_strtod(token, tc, &expr->as.number)) {
         expr->kind = EXPR_KIND_NUMBER;
@@ -235,7 +236,6 @@ Expr_Index parse_plus_expr(String_View *source, Tmp_Cstr *tc, Expr_Buffer *eb)
 
         Expr_Index expr_index = expr_buffer_alloc(eb);
         Expr *expr = expr_buffer_at(eb, expr_index);
-        memset(expr, 0, sizeof(Expr));
         expr->kind = EXPR_KIND_PLUS;
         expr->as.plus.lhs = lhs_index;
         expr->as.plus.rhs = rhs_index;
@@ -449,7 +449,25 @@ double table_eval_expr(Table *table, Expr_Buffer *eb, Expr_Index expr_index)
     return 0;
 }
 
-Cell_Index nbor_cell(Cell_Index index, Dir dir)
+Dir opposite_dir(Dir dir)
+{
+    switch (dir) {
+    case DIR_LEFT:
+        return DIR_RIGHT;
+    case DIR_RIGHT:
+        return DIR_LEFT;
+    case DIR_UP:
+        return DIR_DOWN;
+    case DIR_DOWN:
+        return DIR_UP;
+    default: {
+        assert(0 && "unreachable: your memory is probably corrupted somewhere");
+        exit(1);
+    }
+    }
+}
+
+Cell_Index nbor_in_dir(Cell_Index index, Dir dir)
 {
     switch (dir) {
     case DIR_LEFT:
@@ -473,23 +491,99 @@ Cell_Index nbor_cell(Cell_Index index, Dir dir)
     return index;
 }
 
+Expr_Index move_expr_in_dir(Expr_Buffer *eb, Expr_Index root, Dir dir)
+{
+    Expr *expr = expr_buffer_at(eb, root);
+    switch (expr->kind) {
+    case EXPR_KIND_NUMBER:
+        return root;
+
+    case EXPR_KIND_CELL: {
+        Expr_Index new_index = expr_buffer_alloc(eb);
+        Expr *new_expr = expr_buffer_at(eb, new_index);
+
+        new_expr->kind = EXPR_KIND_CELL;
+        new_expr->as.cell = nbor_in_dir(expr->as.cell, dir);
+
+        return new_index;
+    }
+    break;
+
+    case EXPR_KIND_PLUS: {
+        Expr_Index new_index = expr_buffer_alloc(eb);
+        Expr *new_expr = expr_buffer_at(eb, new_index);
+
+        new_expr->kind = EXPR_KIND_PLUS;
+        new_expr->as.plus.lhs = move_expr_in_dir(eb, expr->as.plus.lhs, dir);
+        new_expr->as.plus.rhs = move_expr_in_dir(eb, expr->as.plus.rhs, dir);
+
+        return new_index;
+    }
+    break;
+
+    default: {
+        assert(0 && "unreachable: your memory is probably corrupted somewhere");
+        exit(1);
+    }
+    }
+}
+
 void table_eval_cell(Table *table, Expr_Buffer *eb, Cell_Index cell_index)
 {
     Cell *cell = table_cell_at(table, cell_index);
 
-    if (cell->kind == CELL_KIND_EXPR) {
-        if (cell->as.expr.status == INPROGRESS) {
+    switch (cell->kind) {
+    case CELL_KIND_TEXT:
+    case CELL_KIND_NUMBER:
+        cell->status = EVALUATED;
+        break;
+    case CELL_KIND_EXPR: {
+        if (cell->status == INPROGRESS) {
             fprintf(stderr, "ERROR: circular dependency is detected!\n");
             exit(1);
         }
 
-        if (cell->as.expr.status == UNEVALUATED) {
-            cell->as.expr.status = INPROGRESS;
+        if (cell->status == UNEVALUATED) {
+            cell->status = INPROGRESS;
             cell->as.expr.value = table_eval_expr(table, eb, cell->as.expr.index);
-            cell->as.expr.status = EVALUATED;
+            cell->status = EVALUATED;
         }
-    } else if (cell->kind == CELL_KIND_CLONE) {
-        assert(0 && "unimplemented");
+    }
+    break;
+
+    case CELL_KIND_CLONE: {
+        if (cell->status == INPROGRESS) {
+            fprintf(stderr, "ERROR: circular dependency is detected!\n");
+            exit(1);
+        }
+
+        if (cell->status == UNEVALUATED) {
+            cell->status = INPROGRESS;
+
+            Dir dir = cell->as.clone;
+            Cell_Index nbor_index = nbor_in_dir(cell_index, dir);
+            table_eval_cell(table, eb, nbor_index);
+
+            Cell *nbor = table_cell_at(table, nbor_index);
+            cell->kind = nbor->kind;
+            cell->as = nbor->as;
+
+            if (cell->kind == CELL_KIND_EXPR) {
+                cell->as.expr.index = move_expr_in_dir(eb, cell->as.expr.index,  opposite_dir(dir));
+                cell->as.expr.value = table_eval_expr(table, eb, cell->as.expr.index);
+            }
+
+            cell->status = EVALUATED;
+        } else {
+            assert(0 && "unreachable: evaluated clones are an absurd. When a clone cell is evaluated it becomes its neighbor kind");
+        }
+    }
+    break;
+
+    default: {
+        assert(0 && "unreachable: your memory is probably corrupted somewhere");
+        exit(1);
+    }
     }
 }
 

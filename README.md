@@ -27,5 +27,5 @@ The project is using [nobuild](https://github.com/tsoding/nobuild) build system.
 ```console
 $ cc -o nobuild nobuild.c
 $ ./nobuild
-$ ./minicel input.csv
+$ ./minicel csv/sum.csv
 ```
