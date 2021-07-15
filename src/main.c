@@ -141,30 +141,42 @@ String_View next_token(String_View *source)
     exit(1);
 }
 
-bool sv_strtod(String_View sv, double *out)
+typedef struct {
+    size_t capacity;
+    char *cstr;
+} Tmp_Cstr;
+
+char *tmp_cstr_fill(Tmp_Cstr *tc, const char *data, size_t data_size)
 {
-    // TODO(#6): stretchy tmp_buffer for sv_strtod and sv_strtol
-    static char tmp_buffer[1024 * 4];
-    assert(sv.count < sizeof(tmp_buffer));
-    snprintf(tmp_buffer, sizeof(tmp_buffer), SV_Fmt, SV_Arg(sv));
-    char *endptr = NULL;
-    double result = strtod(tmp_buffer, &endptr);
-    if (out) *out = result;
-    return endptr != tmp_buffer && *endptr == '\0';
+    if (data_size + 1 >= tc->capacity) {
+        tc->capacity = data_size + 1;
+        tc->cstr = realloc(tc->cstr, tc->capacity);
+    }
+
+    memcpy(tc->cstr, data, data_size);
+    tc->cstr[data_size] = '\0';
+    return tc->cstr;
 }
 
-bool sv_strtol(String_View sv, long int *out)
+bool sv_strtod(String_View sv, Tmp_Cstr *tc, double *out)
 {
-    static char tmp_buffer[1024 * 4];
-    assert(sv.count < sizeof(tmp_buffer));
-    snprintf(tmp_buffer, sizeof(tmp_buffer), SV_Fmt, SV_Arg(sv));
+    char *ptr = tmp_cstr_fill(tc, sv.data, sv.count);
     char *endptr = NULL;
-    long int result = strtol(tmp_buffer, &endptr, 10);
+    double result = strtod(ptr, &endptr);
     if (out) *out = result;
-    return endptr != tmp_buffer && *endptr == '\0';
+    return endptr != ptr && *endptr == '\0';
 }
 
-Expr_Index parse_primary_expr(String_View *source, Expr_Buffer *eb)
+bool sv_strtol(String_View sv, Tmp_Cstr *tc, long int *out)
+{
+    char *ptr = tmp_cstr_fill(tc, sv.data, sv.count);
+    char *endptr = NULL;
+    long int result = strtol(ptr, &endptr, 10);
+    if (out) *out = result;
+    return endptr != ptr && *endptr == '\0';
+}
+
+Expr_Index parse_primary_expr(String_View *source, Tmp_Cstr *tc, Expr_Buffer *eb)
 {
     String_View token = next_token(source);
 
@@ -177,7 +189,7 @@ Expr_Index parse_primary_expr(String_View *source, Expr_Buffer *eb)
     Expr *expr = expr_buffer_at(eb, expr_index);
     memset(expr, 0, sizeof(Expr));
 
-    if (sv_strtod(token, &expr->as.number)) {
+    if (sv_strtod(token, tc, &expr->as.number)) {
         expr->kind = EXPR_KIND_NUMBER;
 
     } else {
@@ -193,7 +205,7 @@ Expr_Index parse_primary_expr(String_View *source, Expr_Buffer *eb)
         sv_chop_left(&token, 1);
 
         long int row = 0;
-        if (!sv_strtol(token, &row)) {
+        if (!sv_strtol(token, tc, &row)) {
             fprintf(stderr, "ERROR: cell reference must have an integer as the row number\n");
             exit(1);
         }
@@ -204,13 +216,13 @@ Expr_Index parse_primary_expr(String_View *source, Expr_Buffer *eb)
     return expr_index;
 }
 
-Expr_Index parse_plus_expr(String_View *source, Expr_Buffer *eb)
+Expr_Index parse_plus_expr(String_View *source, Tmp_Cstr *tc, Expr_Buffer *eb)
 {
-    Expr_Index lhs_index = parse_primary_expr(source, eb);
+    Expr_Index lhs_index = parse_primary_expr(source, tc, eb);
 
     String_View token = next_token(source);
     if (token.data != NULL && sv_eq(token, SV("+"))) {
-        Expr_Index rhs_index = parse_plus_expr(source, eb);
+        Expr_Index rhs_index = parse_plus_expr(source, tc, eb);
 
         Expr_Index expr_index = expr_buffer_alloc(eb);
         Expr *expr = expr_buffer_at(eb, expr_index);
@@ -248,9 +260,9 @@ void dump_expr(FILE *stream, Expr_Buffer *eb, Expr_Index expr_index, int level)
     }
 }
 
-Expr_Index parse_expr(String_View *source, Expr_Buffer *eb)
+Expr_Index parse_expr(String_View *source, Tmp_Cstr *tc, Expr_Buffer *eb)
 {
-    return parse_plus_expr(source, eb);
+    return parse_plus_expr(source, tc, eb);
 }
 
 Cell *table_cell_at(Table *table, size_t row, size_t col)
@@ -319,7 +331,7 @@ error:
     return NULL;
 }
 
-void parse_table_from_content(Table *table, Expr_Buffer *eb, String_View content)
+void parse_table_from_content(Table *table, Expr_Buffer *eb, Tmp_Cstr *tc, String_View content)
 {
     for (size_t row = 0; content.count > 0; ++row) {
         String_View line = sv_chop_by_delim(&content, '\n');
@@ -330,9 +342,9 @@ void parse_table_from_content(Table *table, Expr_Buffer *eb, String_View content
             if (sv_starts_with(cell_value, SV("="))) {
                 sv_chop_left(&cell_value, 1);
                 cell->kind = CELL_KIND_EXPR;
-                cell->as.expr.index = parse_expr(&cell_value, eb);
+                cell->as.expr.index = parse_expr(&cell_value, tc, eb);
             } else {
-                if (sv_strtod(cell_value, &cell->as.number)) {
+                if (sv_strtod(cell_value, tc, &cell->as.number)) {
                     cell->kind = CELL_KIND_NUMBER;
                 } else {
                     cell->kind = CELL_KIND_TEXT;
@@ -450,12 +462,13 @@ int main(int argc, char **argv)
     };
 
     Expr_Buffer eb = {0};
-
     Table table = {0};
+    Tmp_Cstr tc = {0};
+
     estimate_table_size(input, &table.rows, &table.cols);
     table.cells = malloc(sizeof(*table.cells) * table.rows * table.cols);
     memset(table.cells, 0, sizeof(*table.cells) * table.rows * table.cols);
-    parse_table_from_content(&table, &eb, input);
+    parse_table_from_content(&table, &eb, &tc, input);
 
     for (size_t row = 0; row < table.rows; ++row) {
         for (size_t col = 0; col < table.cols; ++col) {
@@ -486,6 +499,7 @@ int main(int argc, char **argv)
     free(content);
     free(table.cells);
     free(eb.items);
+    free(tc.cstr);
 
     return 0;
 }
