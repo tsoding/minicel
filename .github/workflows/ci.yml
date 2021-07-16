@@ -9,6 +9,10 @@ jobs:
     runs-on: ubuntu-18.04
     steps:
       - uses: actions/checkout@v1
+      - name: install 3rd party things
+        run: |
+          sudo apt-get update
+          sudo apt-get install valgrind
       - name: build everything
         run: |
           $CC -o nobuild nobuild.c
