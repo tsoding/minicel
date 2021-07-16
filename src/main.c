@@ -592,7 +592,8 @@ void table_eval_cell(Table *table, Expr_Buffer *eb, Cell_Index cell_index)
 
 int main(int argc, char **argv)
 {
-    malloc(1);
+    char *foo = malloc(1);
+    foo[1] = 'E';
 
     if (argc < 2) {
         usage(stderr);
