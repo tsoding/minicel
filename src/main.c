@@ -160,20 +160,35 @@ void lexer_print_loc(const Lexer *lexer, FILE *stream)
             lexer_file_col(lexer));
 }
 
-String_View next_token(Lexer *lexer)
+typedef struct {
+    String_View text;
+    const char *file_path;
+    size_t file_row;
+    size_t file_col;
+} Token;
+
+Token lexer_next_token(Lexer *lexer)
 {
     lexer->source = sv_trim(lexer->source);
 
+    Token token;
+    memset(&token, 0, sizeof(token));
+    token.file_path = lexer->file_path;
+    token.file_row = lexer->file_row;
+    token.file_col = lexer_file_col(lexer);
+
     if (lexer->source.count == 0) {
-        return SV_NULL;
+        return token;
     }
 
     if (*lexer->source.data == '+') {
-        return sv_chop_left(&lexer->source, 1);
+        token.text = sv_chop_left(&lexer->source, 1);
+        return token;
     }
 
     if (is_name(*lexer->source.data)) {
-        return sv_chop_left_while(&lexer->source, is_name);
+        token.text = sv_chop_left_while(&lexer->source, is_name);
+        return token;
     }
 
     lexer_print_loc(lexer, stderr);
@@ -218,10 +233,9 @@ bool sv_strtol(String_View sv, Tmp_Cstr *tc, long int *out)
 
 Expr_Index parse_primary_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
 {
-    size_t token_col = lexer_file_col(lexer);
-    String_View token = next_token(lexer);
+    Token token = lexer_next_token(lexer);
 
-    if (token.count == 0) {
+    if (token.text.count == 0) {
         lexer_print_loc(lexer, stderr);
         fprintf(stderr, "ERROR: expected primary expression token, but got end of input\n");
         exit(1);
@@ -229,28 +243,28 @@ Expr_Index parse_primary_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
 
     Expr_Index expr_index = expr_buffer_alloc(eb);
     Expr *expr = expr_buffer_at(eb, expr_index);
-    expr->file_path = lexer->file_path;
-    expr->file_row  = lexer->file_row;
-    expr->file_col  = token_col;
+    expr->file_path = token.file_path;
+    expr->file_row  = token.file_row;
+    expr->file_col  = token.file_col;
 
-    if (sv_strtod(token, tc, &expr->as.number)) {
+    if (sv_strtod(token.text, tc, &expr->as.number)) {
         expr->kind = EXPR_KIND_NUMBER;
 
     } else {
         expr->kind = EXPR_KIND_CELL;
 
-        if (!isupper(*token.data)) {
+        if (!isupper(*token.text.data)) {
             lexer_print_loc(lexer, stderr);
             fprintf(stderr, "ERROR: cell reference must start with capital letter\n");
             exit(1);
         }
 
-        expr->as.cell.col = *token.data - 'A';
+        expr->as.cell.col = *token.text.data - 'A';
 
-        sv_chop_left(&token, 1);
+        sv_chop_left(&token.text, 1);
 
         long int row = 0;
-        if (!sv_strtol(token, tc, &row)) {
+        if (!sv_strtol(token.text, tc, &row)) {
             lexer_print_loc(lexer, stderr);
             fprintf(stderr, "ERROR: cell reference must have an integer as the row number\n");
             exit(1);
@@ -266,9 +280,8 @@ Expr_Index parse_plus_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
 {
     Expr_Index lhs_index = parse_primary_expr(lexer, tc, eb);
 
-    size_t token_col = lexer_file_col(lexer);
-    String_View token = next_token(lexer);
-    if (token.data != NULL && sv_eq(token, SV("+"))) {
+    Token token = lexer_next_token(lexer);
+    if (token.text.data != NULL && sv_eq(token.text, SV("+"))) {
         Expr_Index rhs_index = parse_plus_expr(lexer, tc, eb);
 
         Expr_Index expr_index = expr_buffer_alloc(eb);
@@ -276,9 +289,9 @@ Expr_Index parse_plus_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
         expr->kind = EXPR_KIND_PLUS;
         expr->as.plus.lhs = lhs_index;
         expr->as.plus.rhs = rhs_index;
-        expr->file_path = lexer->file_path;
-        expr->file_row = lexer->file_row;
-        expr->file_col = token_col;
+        expr->file_path = token.file_path;
+        expr->file_row = token.file_row;
+        expr->file_col = token.file_col;
 
         return expr_index;
     }
