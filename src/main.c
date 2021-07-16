@@ -592,9 +592,6 @@ void table_eval_cell(Table *table, Expr_Buffer *eb, Cell_Index cell_index)
 
 int main(int argc, char **argv)
 {
-    char *foo = malloc(1);
-    foo[1] = 'E';
-
     if (argc < 2) {
         usage(stderr);
         fprintf(stderr, "ERROR: input file is not provided\n");
