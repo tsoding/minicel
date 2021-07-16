@@ -9,10 +9,14 @@ jobs:
     runs-on: ubuntu-18.04
     steps:
       - uses: actions/checkout@v1
+      - name: install 3rd party things
+        run: |
+          sudo apt-get update
+          sudo apt-get install valgrind
       - name: build everything
         run: |
           $CC -o nobuild nobuild.c
-          ./nobuild run
+          ./nobuild valgrind
         env:
           CC: gcc
           CXX: g++
@@ -20,10 +24,14 @@ jobs:
     runs-on: ubuntu-18.04
     steps:
       - uses: actions/checkout@v1
+      - name: install 3rd party things
+        run: |
+          sudo apt-get update
+          sudo apt-get install valgrind
       - name: build everything
         run: |
           $CC -o nobuild nobuild.c
-          ./nobuild run
+          ./nobuild valgrind
         env:
           CC: clang
           CXX: clang++
@@ -38,5 +46,19 @@ jobs:
         env:
           CC: clang
           CXX: clang++
-# TODO(#4): there is no CI for windows
-# TODO(#21): there is no CI build for FreeBSD
+  build-windows-msvc:
+    runs-on: windows-2019
+    steps:
+      - name: force LF
+        shell: cmd
+        run: |
+          git config --global core.autocrlf input
+      - uses: actions/checkout@v1
+        # this runs vcvarsall for us, so we get the MSVC toolchain in PATH.
+      - uses: seanmiddleditch/gha-setup-vsdevenv@master
+      - name: build everything
+        shell: cmd
+        # this replaces default PowerShell, which can't fail the build
+        run: |
+          cl.exe nobuild.c
+          .\nobuild.exe run

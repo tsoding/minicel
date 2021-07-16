@@ -72,7 +72,6 @@ int closedir(DIR *dirp);
 #endif  // MINIRENT_H_
 // minirent.h HEADER END ////////////////////////////////////////
 
-// TODO(#28): use GetLastErrorAsString everywhere on Windows error reporting
 LPSTR GetLastErrorAsString(void);
 
 #endif  // _WIN32
@@ -138,8 +137,6 @@ typedef struct {
     size_t count;
 } Cmd_Array;
 
-// TODO(#1): no way to disable echo in nobuild scripts
-// TODO(#2): no way to ignore fails
 #define CMD(...)                                        \
     do {                                                \
         Cmd cmd = {                                     \
@@ -162,7 +159,6 @@ typedef struct {
     Cstr_Array args;
 } Chain_Token;
 
-// TODO(#17): IN and OUT are already taken by WinAPI
 #define IN(path) \
     (Chain_Token) { \
         .type = CHAIN_TOKEN_IN, \
@@ -181,7 +177,6 @@ typedef struct {
         .args = cstr_array_make(__VA_ARGS__, NULL) \
     }
 
-// TODO(#20): pipes do not allow redirecting stderr
 typedef struct {
     Cstr input_filepath;
     Cmd_Array cmds;
@@ -192,7 +187,6 @@ Chain chain_build_from_tokens(Chain_Token first, ...);
 void chain_run_sync(Chain chain);
 void chain_echo(Chain chain);
 
-// TODO(#15): PIPE does not report where exactly a syntactic error has happened
 #define CHAIN(...)                                                      \
     do {                                                                \
         Chain chain = chain_build_from_tokens(__VA_ARGS__, (Chain_Token) {0}); \
@@ -200,7 +194,6 @@ void chain_echo(Chain chain);
         chain_run_sync(chain);                                          \
     } while(0)
 
-// TODO(#29): REBUILD_URSELF does not distinguish MSVC and MinGW setups on Windows
 #ifndef REBUILD_URSELF
 #  if _WIN32
 #    define REBUILD_URSELF(binary_path, source_path) CMD("cl.exe", source_path)
@@ -225,6 +218,7 @@ void chain_echo(Chain chain);
                     .count = argc,                                     \
                 },                                                     \
             };                                                         \
+            INFO("CMD: %s", cmd_show(cmd));                            \
             cmd_run_sync(cmd);                                         \
             exit(0);                                                   \
         }                                                              \
@@ -661,10 +655,6 @@ void pid_wait(Pid pid)
 
 Cstr cmd_show(Cmd cmd)
 {
-    // TODO(#31): cmd_show does not render the command line properly
-    // - No string literals when arguments contains space
-    // - No escaping of special characters
-    // - Etc.
     return cstr_array_join(" ", cmd.line);
 }
 
@@ -679,7 +669,6 @@ Pid cmd_run_async(Cmd cmd, Fd *fdin, Fd *fdout)
     // NOTE: theoretically setting NULL to std handles should not be a problem
     // https://docs.microsoft.com/en-us/windows/console/getstdhandle?redirectedfrom=MSDN#attachdetach-behavior
     siStartInfo.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-    // TODO(#32): check for errors in GetStdHandle
     siStartInfo.hStdOutput = fdout ? *fdout : GetStdHandle(STD_OUTPUT_HANDLE);
     siStartInfo.hStdInput = fdin ? *fdin : GetStdHandle(STD_INPUT_HANDLE);
     siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
@@ -690,8 +679,6 @@ Pid cmd_run_async(Cmd cmd, Fd *fdin, Fd *fdout)
     BOOL bSuccess =
         CreateProcess(
             NULL,
-            // TODO(#33): cmd_run_async on Windows does not render command line properly
-            // It may require wrapping some arguments with double-quotes if they contains spaces, etc.
             cstr_array_join(" ", cmd.line),
             NULL,
             NULL,
