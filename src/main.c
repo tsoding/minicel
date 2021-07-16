@@ -722,6 +722,15 @@ int main(int argc, char **argv)
                 .col = col,
             };
             table_eval_cell(&table, &eb, cell_index);
+        }
+    }
+
+    for (size_t row = 0; row < table.rows; ++row) {
+        for (size_t col = 0; col < table.cols; ++col) {
+            Cell_Index cell_index = {
+                .row = row,
+                .col = col,
+            };
 
             Cell *cell = table_cell_at(&table, cell_index);
             switch (cell->kind) {
