@@ -1,8 +1,10 @@
 #define NOBUILD_IMPLEMENTATION
 #include "./nobuild.h"
 
-#define CFLAGS "-Wall", "-Wextra", "-std=c11", "-pedantic", "-ggdb"
-#define CSV_FILE_PATH "./csv/stress-copy.csv"
+#define CFLAGS "-Wall", "-Wextra", "-Wswitch-enum", "-std=c11", "-pedantic", "-ggdb"
+// #define CSV_FILE_PATH "./csv/stress-copy.csv"
+// #define CSV_FILE_PATH "./csv/sum.csv"
+#define CSV_FILE_PATH "./csv/foo.csv"
 
 const char *cc(void)
 {
