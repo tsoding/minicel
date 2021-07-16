@@ -218,6 +218,7 @@ bool sv_strtol(String_View sv, Tmp_Cstr *tc, long int *out)
 
 Expr_Index parse_primary_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
 {
+    size_t token_col = lexer_file_col(lexer);
     String_View token = next_token(lexer);
 
     if (token.count == 0) {
@@ -230,7 +231,7 @@ Expr_Index parse_primary_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
     Expr *expr = expr_buffer_at(eb, expr_index);
     expr->file_path = lexer->file_path;
     expr->file_row  = lexer->file_row;
-    expr->file_col  = lexer_file_col(lexer);
+    expr->file_col  = token_col;
 
     if (sv_strtod(token, tc, &expr->as.number)) {
         expr->kind = EXPR_KIND_NUMBER;
@@ -396,10 +397,10 @@ error:
 
 void parse_table_from_content(Table *table, Expr_Buffer *eb, Tmp_Cstr *tc, String_View content)
 {
-    for (size_t row = 0; content.count > 0; ++row) {
+    for (size_t row = 0; row < table->rows; ++row) {
         String_View line = sv_chop_by_delim(&content, '\n');
         const char *const line_start = line.data;
-        for (size_t col = 0; line.count > 0; ++col) {
+        for (size_t col = 0; col < table->cols; ++col) {
             String_View cell_value = sv_trim(sv_chop_by_delim(&line, '|'));
             Cell_Index cell_index = {
                 .row = row,
@@ -473,7 +474,7 @@ void estimate_table_size(String_View content, size_t *out_rows, size_t *out_cols
 
 void table_eval_cell(Table *table, Expr_Buffer *eb, Cell_Index cell_index);
 
-double table_eval_expr(Table *table, Expr_Buffer *eb, Cell_Index cell_index, Expr_Index expr_index)
+double table_eval_expr(Table *table, Expr_Buffer *eb, Expr_Index expr_index)
 {
     Expr *expr = expr_buffer_at(eb, expr_index);
 
@@ -484,20 +485,19 @@ double table_eval_expr(Table *table, Expr_Buffer *eb, Cell_Index cell_index, Exp
     case EXPR_KIND_CELL: {
         table_eval_cell(table, eb, expr->as.cell);
 
-        Cell *cell = table_cell_at(table, expr->as.cell);
-        switch (cell->kind) {
+        Cell *target_cell = table_cell_at(table, expr->as.cell);
+        switch (target_cell->kind) {
         case CELL_KIND_NUMBER:
-            return cell->as.number;
+            return target_cell->as.number;
         case CELL_KIND_TEXT: {
-            Cell *expr_cell = table_cell_at(table, cell_index);
-            fprintf(stderr, "%s:%zu:%zu: ERROR: text cells may not participate in math expressions\n", table->file_path, expr_cell->file_row, expr_cell->file_col);
+            fprintf(stderr, "%s:%zu:%zu: ERROR: text cells may not participate in math expressions\n", expr->file_path, expr->file_row, expr->file_col);
             fprintf(stderr, "%s:%zu:%zu: NOTE: the text cell is located here\n",
-                    table->file_path, cell->file_row, cell->file_col);
+                    table->file_path, target_cell->file_row, target_cell->file_col);
             exit(1);
         }
 
         case CELL_KIND_EXPR:
-            return cell->as.expr.value;
+            return target_cell->as.expr.value;
 
         case CELL_KIND_CLONE:
             assert(0 && "unreachable: cell should never be a clone after the evaluation");
@@ -507,8 +507,8 @@ double table_eval_expr(Table *table, Expr_Buffer *eb, Cell_Index cell_index, Exp
     break;
 
     case EXPR_KIND_PLUS: {
-        double lhs = table_eval_expr(table, eb, cell_index, expr->as.plus.lhs);
-        double rhs = table_eval_expr(table, eb, cell_index, expr->as.plus.rhs);
+        double lhs = table_eval_expr(table, eb, expr->as.plus.lhs);
+        double rhs = table_eval_expr(table, eb, expr->as.plus.rhs);
         return lhs + rhs;
     }
     break;
@@ -632,7 +632,7 @@ void table_eval_cell(Table *table, Expr_Buffer *eb, Cell_Index cell_index)
 
         if (cell->status == UNEVALUATED) {
             cell->status = INPROGRESS;
-            cell->as.expr.value = table_eval_expr(table, eb, cell_index, cell->as.expr.index);
+            cell->as.expr.value = table_eval_expr(table, eb, cell->as.expr.index);
             cell->status = EVALUATED;
         }
     }
@@ -661,8 +661,8 @@ void table_eval_cell(Table *table, Expr_Buffer *eb, Cell_Index cell_index)
             cell->as = nbor->as;
 
             if (cell->kind == CELL_KIND_EXPR) {
-                cell->as.expr.index = move_expr_in_dir(table, cell_index, eb, cell->as.expr.index,  opposite_dir(dir));
-                cell->as.expr.value = table_eval_expr(table, eb, cell_index, cell->as.expr.index);
+                cell->as.expr.index = move_expr_in_dir(table, cell_index, eb, cell->as.expr.index, opposite_dir(dir));
+                cell->as.expr.value = table_eval_expr(table, eb, cell->as.expr.index);
             }
 
             cell->status = EVALUATED;
@@ -714,6 +714,7 @@ int main(int argc, char **argv)
     table.cells = malloc(sizeof(*table.cells) * table.rows * table.cols);
     memset(table.cells, 0, sizeof(*table.cells) * table.rows * table.cols);
     parse_table_from_content(&table, &eb, &tc, input);
+
 
     for (size_t row = 0; row < table.rows; ++row) {
         for (size_t col = 0; col < table.cols; ++col) {
