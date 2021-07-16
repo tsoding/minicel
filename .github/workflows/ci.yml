@@ -12,7 +12,7 @@ jobs:
       - name: build everything
         run: |
           $CC -o nobuild nobuild.c
-          ./nobuild run
+          ./nobuild valgrind
         env:
           CC: gcc
           CXX: g++

@@ -20,7 +20,7 @@ int posix_main(int argc, char **argv)
         } else if (strcmp(argv[1], "gdb") == 0) {
             CMD("gdb", "./minicel");
         } else if (strcmp(argv[1], "valgrind") == 0) {
-            CMD("valgrind", "./minicel", CSV_FILE_PATH);
+            CMD("valgrind", "--error-exitcode=1", "./minicel", CSV_FILE_PATH);
         } else {
             PANIC("%s is unknown subcommand", argv[1]);
         }
@@ -29,7 +29,7 @@ int posix_main(int argc, char **argv)
     return 0;
 }
 
-int win32_main(int argc, char **argv)
+int msvc_main(int argc, char **argv)
 {
     CMD("cl.exe", "/Feminicel", "src/main.c");
     if (argc > 1) {
@@ -49,6 +49,6 @@ int main(int argc, char **argv)
 #ifndef _WIN32
     return posix_main(argc, argv);
 #else
-    return win32_main(argc, argv);
+    return msvc_main(argc, argv);
 #endif
 }
