@@ -187,7 +187,7 @@ Token lexer_next_token(Lexer *lexer)
         return token;
     }
 
-    if (*lexer->source.data == '+' || *lexer->source.data == '-') {
+    if (*lexer->source.data == '+' || *lexer->source.data == '-' || *lexer->source.data == '*') {
         token.text = sv_chop_left(&lexer->source, 1);
         return token;
     }
