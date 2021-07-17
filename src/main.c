@@ -467,6 +467,17 @@ void parse_table_from_content(Table *table, Expr_Buffer *eb, Tmp_Cstr *tc, Strin
                     .line_start = line_start,
                 };
                 cell->as.expr.index = parse_expr(&lexer, tc, eb);
+                {
+                    Token token = lexer_next_token(&lexer);
+                    if (token.text.data != NULL) {
+                        fprintf(stderr, "%s:%zu:%zu: ERROR: unexpected token `"SV_Fmt"`\n",
+                                token.file_path,
+                                token.file_row,
+                                token.file_col,
+                                SV_Arg(token.text));
+                        exit(1);
+                    }
+                }
             } else if (sv_starts_with(cell_value, SV(":"))) {
                 sv_chop_left(&cell_value, 1);
                 cell->kind = CELL_KIND_CLONE;
