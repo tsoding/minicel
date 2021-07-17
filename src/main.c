@@ -848,3 +848,8 @@ int main(int argc, char **argv)
 
     return 0;
 }
+
+// TODO: binary operator precedence
+// TODO: parens
+// TODO: unary minus
+// TODO: function calls
