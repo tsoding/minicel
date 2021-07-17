@@ -19,6 +19,8 @@ typedef enum {
 typedef enum {
     BOP_KIND_PLUS,
     BOP_KIND_MINUS,
+    BOP_KIND_MULT,
+    BOP_KIND_DIV,
 } Bop_Kind;
 
 typedef struct {
@@ -187,7 +189,7 @@ Token lexer_next_token(Lexer *lexer)
         return token;
     }
 
-    if (*lexer->source.data == '+' || *lexer->source.data == '-' || *lexer->source.data == '*') {
+    if (*lexer->source.data == '+' || *lexer->source.data == '-' || *lexer->source.data == '*' || *lexer->source.data == '/') {
         token.text = sv_chop_left(&lexer->source, 1);
         return token;
     }
@@ -287,7 +289,7 @@ Expr_Index parse_bop_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
     Expr_Index lhs_index = parse_primary_expr(lexer, tc, eb);
 
     Token token = lexer_next_token(lexer);
-    if (token.text.data != NULL && (sv_eq(token.text, SV("+")) || sv_eq(token.text, SV("-")))) {
+    if (token.text.data != NULL && (sv_eq(token.text, SV("+")) || sv_eq(token.text, SV("-")) || sv_eq(token.text, SV("*")) || sv_eq(token.text, SV("/")))) {
         Expr_Index rhs_index = parse_bop_expr(lexer, tc, eb);
 
         Expr_Index expr_index = expr_buffer_alloc(eb);
@@ -298,6 +300,10 @@ Expr_Index parse_bop_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
                 expr->as.bop.kind = BOP_KIND_PLUS;
             } else if (sv_eq(token.text, SV("-"))) {
                 expr->as.bop.kind = BOP_KIND_MINUS;
+            } else if (sv_eq(token.text, SV("*"))) {
+                expr->as.bop.kind = BOP_KIND_MULT;
+            } else if (sv_eq(token.text, SV("/"))) {
+                expr->as.bop.kind = BOP_KIND_DIV;
             } else {
                 assert(0 && "unreachable");
             }
@@ -359,6 +365,14 @@ void dump_expr(FILE *stream, Expr_Buffer *eb, Expr_Index expr_index, int level)
 
         case BOP_KIND_MINUS:
             fprintf(stream, "BOP(MINUS):\n");
+            break;
+
+        case BOP_KIND_MULT:
+            fprintf(stream, "BOP(MULT):\n");
+            break;
+
+        case BOP_KIND_DIV:
+            fprintf(stream, "BOP(DIV):\n");
             break;
 
         default: {
@@ -573,6 +587,10 @@ double table_eval_expr(Table *table, Expr_Buffer *eb, Expr_Index expr_index)
             return lhs + rhs;
         case BOP_KIND_MINUS:
             return lhs - rhs;
+        case BOP_KIND_MULT:
+            return lhs * rhs;
+        case BOP_KIND_DIV:
+            return lhs / rhs;
         default: {
             assert(0 && "unreachable");
             exit(1);
