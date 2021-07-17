@@ -13,13 +13,18 @@ typedef size_t Expr_Index;
 typedef enum {
     EXPR_KIND_NUMBER = 0,
     EXPR_KIND_CELL,
-    EXPR_KIND_PLUS,
+    EXPR_KIND_BOP,
 } Expr_Kind;
 
+typedef enum {
+    BOP_KIND_PLUS
+} Bop_Kind;
+
 typedef struct {
+    Bop_Kind kind;
     Expr_Index lhs;
     Expr_Index rhs;
-} Expr_Plus;
+} Expr_Bop;
 
 typedef struct {
     size_t row;
@@ -29,7 +34,7 @@ typedef struct {
 typedef union {
     double number;
     Cell_Index cell;
-    Expr_Plus plus;
+    Expr_Bop bop;
 } Expr_As;
 
 struct Expr {
@@ -276,19 +281,20 @@ Expr_Index parse_primary_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
     return expr_index;
 }
 
-Expr_Index parse_plus_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
+Expr_Index parse_bop_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
 {
     Expr_Index lhs_index = parse_primary_expr(lexer, tc, eb);
 
     Token token = lexer_next_token(lexer);
     if (token.text.data != NULL && sv_eq(token.text, SV("+"))) {
-        Expr_Index rhs_index = parse_plus_expr(lexer, tc, eb);
+        Expr_Index rhs_index = parse_bop_expr(lexer, tc, eb);
 
         Expr_Index expr_index = expr_buffer_alloc(eb);
         Expr *expr = expr_buffer_at(eb, expr_index);
-        expr->kind = EXPR_KIND_PLUS;
-        expr->as.plus.lhs = lhs_index;
-        expr->as.plus.rhs = rhs_index;
+        expr->kind = EXPR_KIND_BOP;
+        expr->as.bop.kind = BOP_KIND_PLUS;
+        expr->as.bop.lhs = lhs_index;
+        expr->as.bop.rhs = rhs_index;
         expr->file_path = token.file_path;
         expr->file_row = token.file_row;
         expr->file_col = token.file_col;
@@ -336,17 +342,31 @@ void dump_expr(FILE *stream, Expr_Buffer *eb, Expr_Index expr_index, int level)
         fprintf(stream, "CELL(%zu, %zu)\n", expr->as.cell.row, expr->as.cell.col);
         break;
 
-    case EXPR_KIND_PLUS:
-        fprintf(stream, "PLUS:\n");
-        dump_expr(stream, eb, expr->as.plus.lhs, level + 1);
-        dump_expr(stream, eb, expr->as.plus.rhs, level + 1);
+    case EXPR_KIND_BOP:
+        switch (expr->as.bop.kind) {
+        case BOP_KIND_PLUS:
+            fprintf(stream, "BOP(PLUS):\n");
+            break;
+        default: {
+            assert(0 && "unreachable: your memory is probably corrupted somewhere");
+            exit(1);
+        }
+        }
+
+        dump_expr(stream, eb, expr->as.bop.lhs, level + 1);
+        dump_expr(stream, eb, expr->as.bop.rhs, level + 1);
         break;
+
+    default: {
+        assert(0 && "unreachable: your memory is probably corrupted somewhere");
+        exit(1);
+    }
     }
 }
 
 Expr_Index parse_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
 {
-    return parse_plus_expr(lexer, tc, eb);
+    return parse_bop_expr(lexer, tc, eb);
 }
 
 void usage(FILE *stream)
@@ -519,10 +539,18 @@ double table_eval_expr(Table *table, Expr_Buffer *eb, Expr_Index expr_index)
     }
     break;
 
-    case EXPR_KIND_PLUS: {
-        double lhs = table_eval_expr(table, eb, expr->as.plus.lhs);
-        double rhs = table_eval_expr(table, eb, expr->as.plus.rhs);
-        return lhs + rhs;
+    case EXPR_KIND_BOP: {
+        double lhs = table_eval_expr(table, eb, expr->as.bop.lhs);
+        double rhs = table_eval_expr(table, eb, expr->as.bop.rhs);
+
+        switch (expr->as.bop.kind) {
+        case BOP_KIND_PLUS:
+            return lhs + rhs;
+        default: {
+            assert(0 && "unreachable");
+            exit(1);
+        }
+        }
     }
     break;
     }
@@ -594,24 +622,22 @@ Expr_Index move_expr_in_dir(Table *table, Cell_Index cell_index, Expr_Buffer *eb
     }
     break;
 
-    case EXPR_KIND_PLUS: {
-        Expr_Index lhs, rhs;
+    case EXPR_KIND_BOP: {
+        Expr_Bop bop = {0};
 
         {
             Expr *root_expr = expr_buffer_at(eb, root);
-            lhs = root_expr->as.plus.lhs;
-            rhs = root_expr->as.plus.rhs;
+            bop = root_expr->as.bop;
         }
 
-        lhs = move_expr_in_dir(table, cell_index, eb, lhs, dir);
-        rhs = move_expr_in_dir(table, cell_index, eb, rhs, dir);
+        bop.lhs = move_expr_in_dir(table, cell_index, eb, bop.lhs, dir);
+        bop.rhs = move_expr_in_dir(table, cell_index, eb, bop.rhs, dir);
 
         Expr_Index new_index = expr_buffer_alloc(eb);
         {
             Expr *new_expr = expr_buffer_at(eb, new_index);
-            new_expr->kind = EXPR_KIND_PLUS;
-            new_expr->as.plus.lhs = lhs;
-            new_expr->as.plus.rhs = rhs;
+            new_expr->kind = EXPR_KIND_BOP;
+            new_expr->as.bop = bop;
             new_expr->file_path = table->file_path;
             new_expr->file_row = cell->file_row;
             new_expr->file_col = cell->file_col;
