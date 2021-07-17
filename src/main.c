@@ -13,13 +13,86 @@ typedef size_t Expr_Index;
 typedef enum {
     EXPR_KIND_NUMBER = 0,
     EXPR_KIND_CELL,
-    EXPR_KIND_PLUS,
+    EXPR_KIND_BOP,
+    EXPR_KIND_UOP,
 } Expr_Kind;
 
+typedef enum {
+    BOP_KIND_PLUS = 0,
+    BOP_KIND_MINUS,
+    BOP_KIND_MULT,
+    BOP_KIND_DIV,
+    COUNT_BOP_KINDS,
+} Bop_Kind;
+
 typedef struct {
+    Bop_Kind kind;
+    String_View token;
+    size_t precedence;
+} Bop_Def;
+
+typedef enum {
+    BOP_PRECEDENCE0 = 0,
+    BOP_PRECEDENCE1,
+    COUNT_BOP_PRECEDENCE
+} Bop_Precedence;
+
+static_assert(COUNT_BOP_KINDS == 4, "The amount of Binary Operators has changed. Please adjust the definition table accordingly");
+static const Bop_Def bop_defs[COUNT_BOP_KINDS] = {
+    [BOP_KIND_PLUS] = {
+        .kind = BOP_KIND_PLUS,
+        .token = SV_STATIC("+"),
+        .precedence = BOP_PRECEDENCE0,
+    },
+    [BOP_KIND_MINUS] = {
+        .kind = BOP_KIND_MINUS,
+        .token = SV_STATIC("-"),
+        .precedence = BOP_PRECEDENCE0,
+    },
+    [BOP_KIND_MULT] = {
+        .kind = BOP_KIND_MULT,
+        .token = SV_STATIC("*"),
+        .precedence = BOP_PRECEDENCE1,
+    },
+    [BOP_KIND_DIV] = {
+        .kind = BOP_KIND_DIV,
+        .token = SV_STATIC("/"),
+        .precedence = BOP_PRECEDENCE1,
+    },
+};
+
+const Bop_Def *bop_def_by_token(String_View token)
+{
+    for (Bop_Kind kind = 0; kind < COUNT_BOP_KINDS; ++kind) {
+        if (sv_eq(bop_defs[kind].token, token)) {
+            return &bop_defs[kind];
+        }
+    }
+
+    return NULL;
+}
+
+Bop_Def get_bop_def(Bop_Kind kind)
+{
+    assert(0 <= kind);
+    assert(kind < COUNT_BOP_KINDS);
+    return bop_defs[kind];
+}
+
+typedef struct {
+    Bop_Kind kind;
     Expr_Index lhs;
     Expr_Index rhs;
-} Expr_Plus;
+} Expr_Bop;
+
+typedef enum {
+    UOP_KIND_MINUS
+} Uop_Kind;
+
+typedef struct {
+    Uop_Kind kind;
+    Expr_Index param;
+} Expr_Uop;
 
 typedef struct {
     size_t row;
@@ -29,7 +102,8 @@ typedef struct {
 typedef union {
     double number;
     Cell_Index cell;
-    Expr_Plus plus;
+    Expr_Bop bop;
+    Expr_Uop uop;
 } Expr_As;
 
 struct Expr {
@@ -141,6 +215,13 @@ bool is_name(char c)
 }
 
 typedef struct {
+    String_View text;
+    const char *file_path;
+    size_t file_row;
+    size_t file_col;
+} Token;
+
+typedef struct {
     String_View source;
     const char *file_path;
     size_t file_row;
@@ -160,14 +241,7 @@ void lexer_print_loc(const Lexer *lexer, FILE *stream)
             lexer_file_col(lexer));
 }
 
-typedef struct {
-    String_View text;
-    const char *file_path;
-    size_t file_row;
-    size_t file_col;
-} Token;
-
-Token lexer_next_token(Lexer *lexer)
+Token lexer_peek_token(Lexer *lexer)
 {
     lexer->source = sv_trim(lexer->source);
 
@@ -181,19 +255,47 @@ Token lexer_next_token(Lexer *lexer)
         return token;
     }
 
-    if (*lexer->source.data == '+') {
-        token.text = sv_chop_left(&lexer->source, 1);
+    if (*lexer->source.data == '+' ||
+            *lexer->source.data == '-' ||
+            *lexer->source.data == '*' ||
+            *lexer->source.data == '/' ||
+            *lexer->source.data == '(' ||
+            *lexer->source.data == ')') {
+        token.text = (String_View) {
+            .count = 1,
+            .data = lexer->source.data
+        };
         return token;
     }
 
     if (is_name(*lexer->source.data)) {
-        token.text = sv_chop_left_while(&lexer->source, is_name);
+        token.text = sv_take_left_while(lexer->source, is_name);
         return token;
     }
 
     lexer_print_loc(lexer, stderr);
     fprintf(stderr, "ERROR: unknown token starts with `%c`\n", *lexer->source.data);
     exit(1);
+}
+
+Token lexer_next_token(Lexer *lexer)
+{
+    Token token = lexer_peek_token(lexer);
+    sv_chop_left(&lexer->source, token.text.count);
+    return token;
+}
+
+void lexer_expect_no_tokens(Lexer *lexer)
+{
+    Token token = lexer_next_token(lexer);
+    if (token.text.data != NULL) {
+        fprintf(stderr, "%s:%zu:%zu: ERROR: unexpected token `"SV_Fmt"`\n",
+                token.file_path,
+                token.file_row,
+                token.file_col,
+                SV_Arg(token.text));
+        exit(1);
+    }
 }
 
 typedef struct {
@@ -231,6 +333,8 @@ bool sv_strtol(String_View sv, Tmp_Cstr *tc, long int *out)
     return endptr != ptr && *endptr == '\0';
 }
 
+Expr_Index parse_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb);
+
 Expr_Index parse_primary_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
 {
     Token token = lexer_next_token(lexer);
@@ -241,16 +345,43 @@ Expr_Index parse_primary_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
         exit(1);
     }
 
-    Expr_Index expr_index = expr_buffer_alloc(eb);
-    Expr *expr = expr_buffer_at(eb, expr_index);
-    expr->file_path = token.file_path;
-    expr->file_row  = token.file_row;
-    expr->file_col  = token.file_col;
-
-    if (sv_strtod(token.text, tc, &expr->as.number)) {
+    double number = 0.0;
+    if (sv_strtod(token.text, tc, &number)) {
+        Expr_Index expr_index = expr_buffer_alloc(eb);
+        Expr *expr = expr_buffer_at(eb, expr_index);
         expr->kind = EXPR_KIND_NUMBER;
-
+        expr->as.number = number;
+        expr->file_path = token.file_path;
+        expr->file_row  = token.file_row;
+        expr->file_col  = token.file_col;
+        return expr_index;
+    } else if (sv_eq(token.text, SV("("))) {
+        Expr_Index expr_index = parse_expr(lexer, tc, eb);
+        token = lexer_next_token(lexer);
+        if (!sv_eq(token.text, SV(")"))) {
+            fprintf(stderr, "%s:%zu:%zu: Expected token `)` but got `"SV_Fmt"`\n", token.file_path, token.file_row, token.file_col, SV_Arg(token.text));
+            exit(1);
+        }
+        return expr_index;
+    } else if (sv_eq(token.text, SV("-"))) {
+        Expr_Index param_index = parse_expr(lexer, tc, eb);
+        Expr_Index expr_index = expr_buffer_alloc(eb);
+        {
+            Expr *expr = expr_buffer_at(eb, expr_index);
+            expr->kind = EXPR_KIND_UOP;
+            expr->as.uop.kind = UOP_KIND_MINUS;
+            expr->as.uop.param = param_index;
+            expr->file_path = token.file_path;
+            expr->file_row  = token.file_row;
+            expr->file_col  = token.file_col;
+        }
+        return expr_index;
     } else {
+        Expr_Index expr_index = expr_buffer_alloc(eb);
+        Expr *expr = expr_buffer_at(eb, expr_index);
+        expr->file_path = token.file_path;
+        expr->file_row  = token.file_row;
+        expr->file_col  = token.file_col;
         expr->kind = EXPR_KIND_CELL;
 
         if (!isupper(*token.text.data)) {
@@ -271,27 +402,36 @@ Expr_Index parse_primary_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
         }
 
         expr->as.cell.row = (size_t) row;
+        return expr_index;
     }
-
-    return expr_index;
 }
 
-Expr_Index parse_plus_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
+Expr_Index parse_bop_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb, size_t precedence)
 {
-    Expr_Index lhs_index = parse_primary_expr(lexer, tc, eb);
+    if (precedence >= COUNT_BOP_PRECEDENCE) {
+        return parse_primary_expr(lexer, tc, eb);
+    }
 
-    Token token = lexer_next_token(lexer);
-    if (token.text.data != NULL && sv_eq(token.text, SV("+"))) {
-        Expr_Index rhs_index = parse_plus_expr(lexer, tc, eb);
+    Expr_Index lhs_index = parse_bop_expr(lexer, tc, eb, precedence + 1);
+
+    Token token = lexer_peek_token(lexer);
+    const Bop_Def *def = bop_def_by_token(token.text);
+
+    if (def != NULL && def->precedence == precedence) {
+        token = lexer_next_token(lexer);
+        Expr_Index rhs_index = parse_bop_expr(lexer, tc, eb, precedence);
 
         Expr_Index expr_index = expr_buffer_alloc(eb);
-        Expr *expr = expr_buffer_at(eb, expr_index);
-        expr->kind = EXPR_KIND_PLUS;
-        expr->as.plus.lhs = lhs_index;
-        expr->as.plus.rhs = rhs_index;
-        expr->file_path = token.file_path;
-        expr->file_row = token.file_row;
-        expr->file_col = token.file_col;
+        {
+            Expr *expr = expr_buffer_at(eb, expr_index);
+            expr->kind = EXPR_KIND_BOP;
+            expr->as.bop.kind = def->kind;
+            expr->as.bop.lhs = lhs_index;
+            expr->as.bop.rhs = rhs_index;
+            expr->file_path = token.file_path;
+            expr->file_row = token.file_row;
+            expr->file_col = token.file_col;
+        }
 
         return expr_index;
     }
@@ -336,17 +476,58 @@ void dump_expr(FILE *stream, Expr_Buffer *eb, Expr_Index expr_index, int level)
         fprintf(stream, "CELL(%zu, %zu)\n", expr->as.cell.row, expr->as.cell.col);
         break;
 
-    case EXPR_KIND_PLUS:
-        fprintf(stream, "PLUS:\n");
-        dump_expr(stream, eb, expr->as.plus.lhs, level + 1);
-        dump_expr(stream, eb, expr->as.plus.rhs, level + 1);
+    case EXPR_KIND_UOP:
+        switch (expr->as.uop.kind) {
+        case UOP_KIND_MINUS:
+            fprintf(stream, "UOP(MINUS):\n");
+            break;
+        default:
+            assert(0 && "unreachable");
+            exit(1);
+        }
+
+        dump_expr(stream, eb, expr->as.uop.param, level + 1);
         break;
+
+    case EXPR_KIND_BOP:
+        switch (expr->as.bop.kind) {
+        case BOP_KIND_PLUS:
+            fprintf(stream, "BOP(PLUS):\n");
+            break;
+
+        case BOP_KIND_MINUS:
+            fprintf(stream, "BOP(MINUS):\n");
+            break;
+
+        case BOP_KIND_MULT:
+            fprintf(stream, "BOP(MULT):\n");
+            break;
+
+        case BOP_KIND_DIV:
+            fprintf(stream, "BOP(DIV):\n");
+            break;
+
+        case COUNT_BOP_KINDS:
+        default: {
+            assert(0 && "unreachable: your memory is probably corrupted somewhere");
+            exit(1);
+        }
+        }
+
+        dump_expr(stream, eb, expr->as.bop.lhs, level + 1);
+        dump_expr(stream, eb, expr->as.bop.rhs, level + 1);
+        break;
+
+    default: {
+        assert(0 && "unreachable: your memory is probably corrupted somewhere");
+        exit(1);
+    }
     }
 }
 
 Expr_Index parse_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
 {
-    return parse_plus_expr(lexer, tc, eb);
+    return parse_bop_expr(lexer, tc, eb, BOP_PRECEDENCE0);
 }
 
 void usage(FILE *stream)
@@ -433,6 +614,7 @@ void parse_table_from_content(Table *table, Expr_Buffer *eb, Tmp_Cstr *tc, Strin
                     .line_start = line_start,
                 };
                 cell->as.expr.index = parse_expr(&lexer, tc, eb);
+                lexer_expect_no_tokens(&lexer);
             } else if (sv_starts_with(cell_value, SV(":"))) {
                 sv_chop_left(&cell_value, 1);
                 cell->kind = CELL_KIND_CLONE;
@@ -519,10 +701,39 @@ double table_eval_expr(Table *table, Expr_Buffer *eb, Expr_Index expr_index)
     }
     break;
 
-    case EXPR_KIND_PLUS: {
-        double lhs = table_eval_expr(table, eb, expr->as.plus.lhs);
-        double rhs = table_eval_expr(table, eb, expr->as.plus.rhs);
-        return lhs + rhs;
+    case EXPR_KIND_BOP: {
+        double lhs = table_eval_expr(table, eb, expr->as.bop.lhs);
+        double rhs = table_eval_expr(table, eb, expr->as.bop.rhs);
+
+        switch (expr->as.bop.kind) {
+        case BOP_KIND_PLUS:
+            return lhs + rhs;
+        case BOP_KIND_MINUS:
+            return lhs - rhs;
+        case BOP_KIND_MULT:
+            return lhs * rhs;
+        case BOP_KIND_DIV:
+            return lhs / rhs;
+        case COUNT_BOP_KINDS:
+        default: {
+            assert(0 && "unreachable");
+            exit(1);
+        }
+        }
+    }
+    break;
+
+    case EXPR_KIND_UOP: {
+        double param = table_eval_expr(table, eb, expr->as.uop.param);
+
+        switch (expr->as.uop.kind) {
+        case UOP_KIND_MINUS:
+            return -param;
+        default: {
+            assert(0 && "unreachable");
+            exit(1);
+        }
+        }
     }
     break;
     }
@@ -594,24 +805,45 @@ Expr_Index move_expr_in_dir(Table *table, Cell_Index cell_index, Expr_Buffer *eb
     }
     break;
 
-    case EXPR_KIND_PLUS: {
-        Expr_Index lhs, rhs;
+    case EXPR_KIND_BOP: {
+        Expr_Bop bop = {0};
 
         {
             Expr *root_expr = expr_buffer_at(eb, root);
-            lhs = root_expr->as.plus.lhs;
-            rhs = root_expr->as.plus.rhs;
+            bop = root_expr->as.bop;
         }
 
-        lhs = move_expr_in_dir(table, cell_index, eb, lhs, dir);
-        rhs = move_expr_in_dir(table, cell_index, eb, rhs, dir);
+        bop.lhs = move_expr_in_dir(table, cell_index, eb, bop.lhs, dir);
+        bop.rhs = move_expr_in_dir(table, cell_index, eb, bop.rhs, dir);
 
         Expr_Index new_index = expr_buffer_alloc(eb);
         {
             Expr *new_expr = expr_buffer_at(eb, new_index);
-            new_expr->kind = EXPR_KIND_PLUS;
-            new_expr->as.plus.lhs = lhs;
-            new_expr->as.plus.rhs = rhs;
+            new_expr->kind = EXPR_KIND_BOP;
+            new_expr->as.bop = bop;
+            new_expr->file_path = table->file_path;
+            new_expr->file_row = cell->file_row;
+            new_expr->file_col = cell->file_col;
+        }
+
+        return new_index;
+    }
+    break;
+
+    case EXPR_KIND_UOP: {
+        Expr_Uop uop = {0};
+        {
+            Expr *root_expr = expr_buffer_at(eb, root);
+            uop = root_expr->as.uop;
+        }
+
+        uop.param = move_expr_in_dir(table, cell_index, eb, uop.param, dir);
+
+        Expr_Index new_index = expr_buffer_alloc(eb);
+        {
+            Expr *new_expr = expr_buffer_at(eb, new_index);
+            new_expr->kind = EXPR_KIND_UOP;
+            new_expr->as.uop = uop;
             new_expr->file_path = table->file_path;
             new_expr->file_row = cell->file_row;
             new_expr->file_col = cell->file_col;
@@ -691,7 +923,6 @@ void table_eval_cell(Table *table, Expr_Buffer *eb, Cell_Index cell_index)
     }
     }
 }
-
 
 int main(int argc, char **argv)
 {
@@ -778,3 +1009,4 @@ int main(int argc, char **argv)
 
     return 0;
 }
+
