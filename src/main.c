@@ -17,7 +17,8 @@ typedef enum {
 } Expr_Kind;
 
 typedef enum {
-    BOP_KIND_PLUS
+    BOP_KIND_PLUS,
+    BOP_KIND_MINUS,
 } Bop_Kind;
 
 typedef struct {
@@ -186,7 +187,7 @@ Token lexer_next_token(Lexer *lexer)
         return token;
     }
 
-    if (*lexer->source.data == '+') {
+    if (*lexer->source.data == '+' || *lexer->source.data == '-') {
         token.text = sv_chop_left(&lexer->source, 1);
         return token;
     }
@@ -286,18 +287,26 @@ Expr_Index parse_bop_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
     Expr_Index lhs_index = parse_primary_expr(lexer, tc, eb);
 
     Token token = lexer_next_token(lexer);
-    if (token.text.data != NULL && sv_eq(token.text, SV("+"))) {
+    if (token.text.data != NULL && (sv_eq(token.text, SV("+")) || sv_eq(token.text, SV("-")))) {
         Expr_Index rhs_index = parse_bop_expr(lexer, tc, eb);
 
         Expr_Index expr_index = expr_buffer_alloc(eb);
-        Expr *expr = expr_buffer_at(eb, expr_index);
-        expr->kind = EXPR_KIND_BOP;
-        expr->as.bop.kind = BOP_KIND_PLUS;
-        expr->as.bop.lhs = lhs_index;
-        expr->as.bop.rhs = rhs_index;
-        expr->file_path = token.file_path;
-        expr->file_row = token.file_row;
-        expr->file_col = token.file_col;
+        {
+            Expr *expr = expr_buffer_at(eb, expr_index);
+            expr->kind = EXPR_KIND_BOP;
+            if (sv_eq(token.text, SV("+"))) {
+                expr->as.bop.kind = BOP_KIND_PLUS;
+            } else if (sv_eq(token.text, SV("-"))) {
+                expr->as.bop.kind = BOP_KIND_MINUS;
+            } else {
+                assert(0 && "unreachable");
+            }
+            expr->as.bop.lhs = lhs_index;
+            expr->as.bop.rhs = rhs_index;
+            expr->file_path = token.file_path;
+            expr->file_row = token.file_row;
+            expr->file_col = token.file_col;
+        }
 
         return expr_index;
     }
@@ -347,6 +356,11 @@ void dump_expr(FILE *stream, Expr_Buffer *eb, Expr_Index expr_index, int level)
         case BOP_KIND_PLUS:
             fprintf(stream, "BOP(PLUS):\n");
             break;
+
+        case BOP_KIND_MINUS:
+            fprintf(stream, "BOP(MINUS):\n");
+            break;
+
         default: {
             assert(0 && "unreachable: your memory is probably corrupted somewhere");
             exit(1);
@@ -546,6 +560,8 @@ double table_eval_expr(Table *table, Expr_Buffer *eb, Expr_Index expr_index)
         switch (expr->as.bop.kind) {
         case BOP_KIND_PLUS:
             return lhs + rhs;
+        case BOP_KIND_MINUS:
+            return lhs - rhs;
         default: {
             assert(0 && "unreachable");
             exit(1);
@@ -717,7 +733,6 @@ void table_eval_cell(Table *table, Expr_Buffer *eb, Cell_Index cell_index)
     }
     }
 }
-
 
 int main(int argc, char **argv)
 {
