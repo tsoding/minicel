@@ -692,7 +692,6 @@ void table_eval_cell(Table *table, Expr_Buffer *eb, Cell_Index cell_index)
     }
 }
 
-// TODO(#7): syntax for copying expression from a neighbor cell
 
 int main(int argc, char **argv)
 {
