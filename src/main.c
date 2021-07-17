@@ -14,6 +14,7 @@ typedef enum {
     EXPR_KIND_NUMBER = 0,
     EXPR_KIND_CELL,
     EXPR_KIND_BOP,
+    EXPR_KIND_UOP,
 } Expr_Kind;
 
 typedef enum {
@@ -84,6 +85,15 @@ typedef struct {
     Expr_Index rhs;
 } Expr_Bop;
 
+typedef enum {
+    UOP_KIND_MINUS
+} Uop_Kind;
+
+typedef struct {
+    Uop_Kind kind;
+    Expr_Index param;
+} Expr_Uop;
+
 typedef struct {
     size_t row;
     size_t col;
@@ -93,6 +103,7 @@ typedef union {
     double number;
     Cell_Index cell;
     Expr_Bop bop;
+    Expr_Uop uop;
 } Expr_As;
 
 struct Expr {
@@ -352,6 +363,19 @@ Expr_Index parse_primary_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
             exit(1);
         }
         return expr_index;
+    } else if (sv_eq(token.text, SV("-"))) {
+        Expr_Index param_index = parse_expr(lexer, tc, eb);
+        Expr_Index expr_index = expr_buffer_alloc(eb);
+        {
+            Expr *expr = expr_buffer_at(eb, expr_index);
+            expr->kind = EXPR_KIND_UOP;
+            expr->as.uop.kind = UOP_KIND_MINUS;
+            expr->as.uop.param = param_index;
+            expr->file_path = token.file_path;
+            expr->file_row  = token.file_row;
+            expr->file_col  = token.file_col;
+        }
+        return expr_index;
     } else {
         Expr_Index expr_index = expr_buffer_alloc(eb);
         Expr *expr = expr_buffer_at(eb, expr_index);
@@ -450,6 +474,19 @@ void dump_expr(FILE *stream, Expr_Buffer *eb, Expr_Index expr_index, int level)
 
     case EXPR_KIND_CELL:
         fprintf(stream, "CELL(%zu, %zu)\n", expr->as.cell.row, expr->as.cell.col);
+        break;
+
+    case EXPR_KIND_UOP:
+        switch (expr->as.uop.kind) {
+        case UOP_KIND_MINUS:
+            fprintf(stream, "UOP(MINUS):\n");
+            break;
+        default:
+            assert(0 && "unreachable");
+            exit(1);
+        }
+
+        dump_expr(stream, eb, expr->as.uop.param, level + 1);
         break;
 
     case EXPR_KIND_BOP:
@@ -685,6 +722,20 @@ double table_eval_expr(Table *table, Expr_Buffer *eb, Expr_Index expr_index)
         }
     }
     break;
+
+    case EXPR_KIND_UOP: {
+        double param = table_eval_expr(table, eb, expr->as.uop.param);
+
+        switch (expr->as.uop.kind) {
+        case UOP_KIND_MINUS:
+            return -param;
+        default: {
+            assert(0 && "unreachable");
+            exit(1);
+        }
+        }
+    }
+    break;
     }
     return 0;
 }
@@ -779,6 +830,29 @@ Expr_Index move_expr_in_dir(Table *table, Cell_Index cell_index, Expr_Buffer *eb
     }
     break;
 
+    case EXPR_KIND_UOP: {
+        Expr_Uop uop = {0};
+        {
+            Expr *root_expr = expr_buffer_at(eb, root);
+            uop = root_expr->as.uop;
+        }
+
+        uop.param = move_expr_in_dir(table, cell_index, eb, uop.param, dir);
+
+        Expr_Index new_index = expr_buffer_alloc(eb);
+        {
+            Expr *new_expr = expr_buffer_at(eb, new_index);
+            new_expr->kind = EXPR_KIND_UOP;
+            new_expr->as.uop = uop;
+            new_expr->file_path = table->file_path;
+            new_expr->file_row = cell->file_row;
+            new_expr->file_col = cell->file_col;
+        }
+
+        return new_index;
+    }
+    break;
+
     default: {
         assert(0 && "unreachable: your memory is probably corrupted somewhere");
         exit(1);
@@ -848,28 +922,6 @@ void table_eval_cell(Table *table, Expr_Buffer *eb, Cell_Index cell_index)
         exit(1);
     }
     }
-}
-
-int main2()
-{
-    size_t source_line = __LINE__ + 1;
-    String_View source = SV_STATIC("(1 + 2)*3");
-
-    Lexer lexer = {
-        .source = source,
-        .file_path = __FILE__,
-        .file_row = source_line,
-        .line_start = source.data,
-    };
-
-    Tmp_Cstr tc = {0};
-    Expr_Buffer eb = {0};
-
-    Expr_Index expr_index = parse_expr(&lexer, &tc, &eb);
-    lexer_expect_no_tokens(&lexer);
-    dump_expr(stdout, &eb, expr_index, 0);
-
-    return 0;
 }
 
 int main(int argc, char **argv)
@@ -958,5 +1010,3 @@ int main(int argc, char **argv)
     return 0;
 }
 
-// TODO: unary minus
-// TODO: function calls
