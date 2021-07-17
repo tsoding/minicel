@@ -17,11 +17,66 @@ typedef enum {
 } Expr_Kind;
 
 typedef enum {
-    BOP_KIND_PLUS,
+    BOP_KIND_PLUS = 0,
     BOP_KIND_MINUS,
     BOP_KIND_MULT,
     BOP_KIND_DIV,
+    COUNT_BOP_KINDS,
 } Bop_Kind;
+
+typedef struct {
+    Bop_Kind kind;
+    String_View token;
+    size_t precedence;
+} Bop_Def;
+
+typedef enum {
+    BOP_PRECEDENCE0 = 0,
+    BOP_PRECEDENCE1,
+    COUNT_BOP_PRECEDENCE
+} Bop_Precedence;
+
+static_assert(COUNT_BOP_KINDS == 4, "The amount of Binary Operators has changed. Please adjust the definition table accordingly");
+static const Bop_Def bop_defs[COUNT_BOP_KINDS] = {
+    [BOP_KIND_PLUS] = {
+        .kind = BOP_KIND_PLUS,
+        .token = SV_STATIC("+"),
+        .precedence = BOP_PRECEDENCE0,
+    },
+    [BOP_KIND_MINUS] = {
+        .kind = BOP_KIND_MINUS,
+        .token = SV_STATIC("-"),
+        .precedence = BOP_PRECEDENCE0,
+    },
+    [BOP_KIND_MULT] = {
+        .kind = BOP_KIND_MULT,
+        .token = SV_STATIC("*"),
+        .precedence = BOP_PRECEDENCE1,
+    },
+    [BOP_KIND_DIV] = {
+        .kind = BOP_KIND_DIV,
+        .token = SV_STATIC("/"),
+        .precedence = BOP_PRECEDENCE1,
+    },
+};
+
+const Bop_Def *bop_def_by_token(String_View token)
+{
+    for (Bop_Kind kind = 0; kind < COUNT_BOP_KINDS; ++kind) {
+        if (sv_eq(bop_defs[kind].token, token)) {
+            return &bop_defs[kind];
+        }
+    }
+
+    return NULL;
+}
+
+Bop_Def get_bop_def(Bop_Kind kind)
+{
+    assert(0 <= kind);
+    assert(kind < COUNT_BOP_KINDS);
+    return bop_defs[kind];
+}
 
 typedef struct {
     Bop_Kind kind;
@@ -149,6 +204,13 @@ bool is_name(char c)
 }
 
 typedef struct {
+    String_View text;
+    const char *file_path;
+    size_t file_row;
+    size_t file_col;
+} Token;
+
+typedef struct {
     String_View source;
     const char *file_path;
     size_t file_row;
@@ -168,14 +230,7 @@ void lexer_print_loc(const Lexer *lexer, FILE *stream)
             lexer_file_col(lexer));
 }
 
-typedef struct {
-    String_View text;
-    const char *file_path;
-    size_t file_row;
-    size_t file_col;
-} Token;
-
-Token lexer_next_token(Lexer *lexer)
+Token lexer_peek_token(Lexer *lexer)
 {
     lexer->source = sv_trim(lexer->source);
 
@@ -190,18 +245,41 @@ Token lexer_next_token(Lexer *lexer)
     }
 
     if (*lexer->source.data == '+' || *lexer->source.data == '-' || *lexer->source.data == '*' || *lexer->source.data == '/') {
-        token.text = sv_chop_left(&lexer->source, 1);
+        token.text = (String_View) {
+            .count = 1,
+            .data = lexer->source.data
+        };
         return token;
     }
 
     if (is_name(*lexer->source.data)) {
-        token.text = sv_chop_left_while(&lexer->source, is_name);
+        token.text = sv_take_left_while(lexer->source, is_name);
         return token;
     }
 
     lexer_print_loc(lexer, stderr);
     fprintf(stderr, "ERROR: unknown token starts with `%c`\n", *lexer->source.data);
     exit(1);
+}
+
+Token lexer_next_token(Lexer *lexer)
+{
+    Token token = lexer_peek_token(lexer);
+    sv_chop_left(&lexer->source, token.text.count);
+    return token;
+}
+
+void lexer_expect_no_tokens(Lexer *lexer)
+{
+    Token token = lexer_next_token(lexer);
+    if (token.text.data != NULL) {
+        fprintf(stderr, "%s:%zu:%zu: ERROR: unexpected token `"SV_Fmt"`\n",
+                token.file_path,
+                token.file_row,
+                token.file_col,
+                SV_Arg(token.text));
+        exit(1);
+    }
 }
 
 typedef struct {
@@ -284,29 +362,26 @@ Expr_Index parse_primary_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
     return expr_index;
 }
 
-Expr_Index parse_bop_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
+Expr_Index parse_bop_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb, size_t precedence)
 {
-    Expr_Index lhs_index = parse_primary_expr(lexer, tc, eb);
+    if (precedence >= COUNT_BOP_PRECEDENCE) {
+        return parse_primary_expr(lexer, tc, eb);
+    }
 
-    Token token = lexer_next_token(lexer);
-    if (token.text.data != NULL && (sv_eq(token.text, SV("+")) || sv_eq(token.text, SV("-")) || sv_eq(token.text, SV("*")) || sv_eq(token.text, SV("/")))) {
-        Expr_Index rhs_index = parse_bop_expr(lexer, tc, eb);
+    Expr_Index lhs_index = parse_bop_expr(lexer, tc, eb, precedence + 1);
+
+    Token token = lexer_peek_token(lexer);
+    const Bop_Def *def = bop_def_by_token(token.text);
+
+    if (def != NULL && def->precedence == precedence) {
+        token = lexer_next_token(lexer);
+        Expr_Index rhs_index = parse_bop_expr(lexer, tc, eb, precedence);
 
         Expr_Index expr_index = expr_buffer_alloc(eb);
         {
             Expr *expr = expr_buffer_at(eb, expr_index);
             expr->kind = EXPR_KIND_BOP;
-            if (sv_eq(token.text, SV("+"))) {
-                expr->as.bop.kind = BOP_KIND_PLUS;
-            } else if (sv_eq(token.text, SV("-"))) {
-                expr->as.bop.kind = BOP_KIND_MINUS;
-            } else if (sv_eq(token.text, SV("*"))) {
-                expr->as.bop.kind = BOP_KIND_MULT;
-            } else if (sv_eq(token.text, SV("/"))) {
-                expr->as.bop.kind = BOP_KIND_DIV;
-            } else {
-                assert(0 && "unreachable");
-            }
+            expr->as.bop.kind = def->kind;
             expr->as.bop.lhs = lhs_index;
             expr->as.bop.rhs = rhs_index;
             expr->file_path = token.file_path;
@@ -375,6 +450,7 @@ void dump_expr(FILE *stream, Expr_Buffer *eb, Expr_Index expr_index, int level)
             fprintf(stream, "BOP(DIV):\n");
             break;
 
+        case COUNT_BOP_KINDS:
         default: {
             assert(0 && "unreachable: your memory is probably corrupted somewhere");
             exit(1);
@@ -394,7 +470,7 @@ void dump_expr(FILE *stream, Expr_Buffer *eb, Expr_Index expr_index, int level)
 
 Expr_Index parse_expr(Lexer *lexer, Tmp_Cstr *tc, Expr_Buffer *eb)
 {
-    return parse_bop_expr(lexer, tc, eb);
+    return parse_bop_expr(lexer, tc, eb, BOP_PRECEDENCE0);
 }
 
 void usage(FILE *stream)
@@ -481,17 +557,7 @@ void parse_table_from_content(Table *table, Expr_Buffer *eb, Tmp_Cstr *tc, Strin
                     .line_start = line_start,
                 };
                 cell->as.expr.index = parse_expr(&lexer, tc, eb);
-                {
-                    Token token = lexer_next_token(&lexer);
-                    if (token.text.data != NULL) {
-                        fprintf(stderr, "%s:%zu:%zu: ERROR: unexpected token `"SV_Fmt"`\n",
-                                token.file_path,
-                                token.file_row,
-                                token.file_col,
-                                SV_Arg(token.text));
-                        exit(1);
-                    }
-                }
+                lexer_expect_no_tokens(&lexer);
             } else if (sv_starts_with(cell_value, SV(":"))) {
                 sv_chop_left(&cell_value, 1);
                 cell->kind = CELL_KIND_CLONE;
@@ -591,6 +657,7 @@ double table_eval_expr(Table *table, Expr_Buffer *eb, Expr_Index expr_index)
             return lhs * rhs;
         case BOP_KIND_DIV:
             return lhs / rhs;
+        case COUNT_BOP_KINDS:
         default: {
             assert(0 && "unreachable");
             exit(1);
@@ -763,6 +830,28 @@ void table_eval_cell(Table *table, Expr_Buffer *eb, Cell_Index cell_index)
     }
 }
 
+int main2()
+{
+    size_t source_line = __LINE__ + 1;
+    String_View source = SV_STATIC("2*3 + 1");
+
+    Lexer lexer = {
+        .source = source,
+        .file_path = __FILE__,
+        .file_row = source_line,
+        .line_start = source.data,
+    };
+
+    Tmp_Cstr tc = {0};
+    Expr_Buffer eb = {0};
+
+    Expr_Index expr_index = parse_expr(&lexer, &tc, &eb);
+    lexer_expect_no_tokens(&lexer);
+    dump_expr(stdout, &eb, expr_index, 0);
+
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) {
@@ -849,7 +938,6 @@ int main(int argc, char **argv)
     return 0;
 }
 
-// TODO: binary operator precedence
 // TODO: parens
 // TODO: unary minus
 // TODO: function calls
