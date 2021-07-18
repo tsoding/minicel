@@ -79,13 +79,6 @@ const Bop_Def *bop_def_by_token(String_View token)
     return NULL;
 }
 
-Bop_Def get_bop_def(Bop_Kind kind)
-{
-    assert(0 <= kind);
-    assert(kind < COUNT_BOP_KINDS);
-    return bop_defs[kind];
-}
-
 typedef struct {
     Bop_Kind kind;
     Expr_Index lhs;
