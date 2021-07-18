@@ -171,7 +171,7 @@ const char *cell_kind_as_cstr(Cell_Kind kind)
         return "CLONE";
     default:
         assert(0 && "unreachable");
-        exit(1);
+        exit(69);
     }
 }
 
@@ -483,7 +483,7 @@ void dump_expr(FILE *stream, Expr_Buffer *eb, Expr_Index expr_index, int level)
             break;
         default:
             assert(0 && "unreachable");
-            exit(1);
+            exit(69);
         }
 
         dump_expr(stream, eb, expr->as.uop.param, level + 1);
@@ -510,7 +510,7 @@ void dump_expr(FILE *stream, Expr_Buffer *eb, Expr_Index expr_index, int level)
         case COUNT_BOP_KINDS:
         default: {
             assert(0 && "unreachable: your memory is probably corrupted somewhere");
-            exit(1);
+            exit(69);
         }
         }
 
@@ -520,7 +520,7 @@ void dump_expr(FILE *stream, Expr_Buffer *eb, Expr_Index expr_index, int level)
 
     default: {
         assert(0 && "unreachable: your memory is probably corrupted somewhere");
-        exit(1);
+        exit(69);
     }
     }
 }
@@ -696,7 +696,7 @@ double table_eval_expr(Table *table, Expr_Buffer *eb, Expr_Index expr_index)
 
         case CELL_KIND_CLONE:
             assert(0 && "unreachable: cell should never be a clone after the evaluation");
-            break;
+            exit(69);
         }
     }
     break;
@@ -717,7 +717,7 @@ double table_eval_expr(Table *table, Expr_Buffer *eb, Expr_Index expr_index)
         case COUNT_BOP_KINDS:
         default: {
             assert(0 && "unreachable");
-            exit(1);
+            exit(69);
         }
         }
     }
@@ -731,7 +731,7 @@ double table_eval_expr(Table *table, Expr_Buffer *eb, Expr_Index expr_index)
             return -param;
         default: {
             assert(0 && "unreachable");
-            exit(1);
+            exit(69);
         }
         }
     }
@@ -753,7 +753,7 @@ Dir opposite_dir(Dir dir)
         return DIR_UP;
     default: {
         assert(0 && "unreachable: your memory is probably corrupted somewhere");
-        exit(1);
+        exit(69);
     }
     }
 }
@@ -775,7 +775,7 @@ Cell_Index nbor_in_dir(Cell_Index index, Dir dir)
         break;
     default: {
         assert(0 && "unreachable: your memory is probably corrupted somewhere");
-        exit(1);
+        exit(69);
     }
     }
 
@@ -855,7 +855,7 @@ Expr_Index move_expr_in_dir(Table *table, Cell_Index cell_index, Expr_Buffer *eb
 
     default: {
         assert(0 && "unreachable: your memory is probably corrupted somewhere");
-        exit(1);
+        exit(69);
     }
     }
 }
@@ -913,13 +913,14 @@ void table_eval_cell(Table *table, Expr_Buffer *eb, Cell_Index cell_index)
             cell->status = EVALUATED;
         } else {
             assert(0 && "unreachable: evaluated clones are an absurd. When a clone cell is evaluated it becomes its neighbor kind");
+            exit(69);
         }
     }
     break;
 
     default: {
         assert(0 && "unreachable: your memory is probably corrupted somewhere");
-        exit(1);
+        exit(69);
     }
     }
 }
@@ -958,7 +959,7 @@ int main(int argc, char **argv)
     memset(table.cells, 0, sizeof(*table.cells) * table.rows * table.cols);
     parse_table_from_content(&table, &eb, &tc, input);
 
-
+    // Evaluate each cell
     for (size_t row = 0; row < table.rows; ++row) {
         for (size_t col = 0; col < table.cols; ++col) {
             Cell_Index cell_index = {
@@ -969,6 +970,55 @@ int main(int argc, char **argv)
         }
     }
 
+    // Estimate column widths
+    size_t *col_widths = malloc(sizeof(size_t) * table.cols);
+    {
+        for (size_t col = 0; col < table.cols; ++col) {
+            col_widths[col] = 0;
+            for (size_t row = 0; row < table.rows; ++row) {
+                Cell_Index cell_index = {
+                    .row = row,
+                    .col = col,
+                };
+
+                Cell *cell = table_cell_at(&table, cell_index);
+                size_t width = 0;
+                switch (cell->kind) {
+                case CELL_KIND_TEXT:
+                    width = cell->as.text.count;
+                    break;
+
+                case CELL_KIND_NUMBER: {
+                    int n = snprintf(NULL, 0, "%lf", cell->as.number);
+                    assert(n >= 0);
+                    width = (size_t) n;
+                }
+                break;
+
+                case CELL_KIND_EXPR: {
+                    int n = snprintf(NULL, 0, "%lf", cell->as.expr.value);
+                    assert(n >= 0);
+                    width = (size_t) n;
+                }
+                break;
+
+                case CELL_KIND_CLONE:
+                    assert(0 && "unreachable: cell should never be a clone after the evaluation");
+                    exit(69);
+
+                default:
+                    assert(0 && "unreachable");
+                    exit(69);
+                }
+
+                if (col_widths[col] < width) {
+                    col_widths[col] = width;
+                }
+            }
+        }
+    }
+
+    // Render the table
     for (size_t row = 0; row < table.rows; ++row) {
         for (size_t col = 0; col < table.cols; ++col) {
             Cell_Index cell_index = {
@@ -977,23 +1027,27 @@ int main(int argc, char **argv)
             };
 
             Cell *cell = table_cell_at(&table, cell_index);
+            int n = 0;
             switch (cell->kind) {
             case CELL_KIND_TEXT:
-                printf(SV_Fmt, SV_Arg(cell->as.text));
+                n = printf(SV_Fmt, SV_Arg(cell->as.text));
                 break;
 
             case CELL_KIND_NUMBER:
-                printf("%lf", cell->as.number);
+                n = printf("%lf", cell->as.number);
                 break;
 
             case CELL_KIND_EXPR:
-                printf("%lf", cell->as.expr.value);
+                n = printf("%lf", cell->as.expr.value);
                 break;
 
             case CELL_KIND_CLONE:
                 assert(0 && "unreachable: cell should never be a clone after the evaluation");
-                break;
+                exit(69);
             }
+            assert(0 <= n);
+            assert((size_t) n <= col_widths[col]);
+            printf("%*s", (int) (col_widths[col] - n), "");
 
             if (col < table.cols - 1) {
                 printf("|");
@@ -1002,6 +1056,7 @@ int main(int argc, char **argv)
         printf("\n");
     }
 
+    free(col_widths);
     free(content);
     free(table.cells);
     free(eb.items);
